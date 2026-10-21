@@ -10,7 +10,6 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ### backlog
 
-- [ ] `0008` Run scripts/task check in CI on every pull request <sup>chore · p0 · quality</sup>
 - [ ] `0009` Can Command Line Tools alone sign, notarize, and staple a release? <sup>spike · p0 · distribution</sup>
 - [ ] `0010` Release workflow: a tag produces a notarized DMG on GitHub Releases <sup>feature · p0 · distribution</sup>
 - [ ] `0011` Launching a second Zipboy deletes the first one's open archives <sup>bug · p1 · document</sup>
@@ -19,6 +18,10 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [ ] `0014` Fixture matrix: every supported variant opens and round-trips <sup>feature · p0 · quality</sup>
 - [ ] `0015` Test the save path: snapshots, cancelled autosaves, and re-encryption <sup>feature · p1 · quality</sup>
 - [ ] `0016` README: install, what it does, and screenshots <sup>docs · p1 · distribution</sup>
+
+### in progress
+
+- [ ] `0008` Run scripts/task check in CI on every pull request <sup>chore · p0 · quality</sup>
 
 ### blocked
 

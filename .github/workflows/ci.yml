@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # By hand on any branch, which is how a deliberately failing branch proves the check can go red.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Pinned to the image whose Swift matches development; swift-format's
+    # output changes between releases, so a drifting runner fails lint.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: scripts/task check
+
+  required:
+    # The single status check branch protection requires.
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "all checks passed"

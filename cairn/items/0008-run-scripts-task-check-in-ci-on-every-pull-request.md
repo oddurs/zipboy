@@ -3,8 +3,10 @@ id: 8
 uid: 0946f681-eff3-41ba-9f31-5c1271bbf55f
 title: Run scripts/task check in CI on every pull request
 type: chore
-status: backlog
+status: doing
 milestone: v0.1
+assignee: Oddur Sigurdsson
+claimed: 2026-10-20
 depends_on:
 - 7
 created: 2026-10-20
