@@ -1,0 +1,74 @@
+#!/bin/sh
+set -eu
+
+# The one seam CI and git hooks call. Verbs: fmt fmt:check lint test build check
+
+cd "$(dirname "$0")/.."
+
+# Command Line Tools ship Swift Testing outside the default search paths;
+# Xcode does not need this.
+test_flags() {
+    dev="$(xcode-select -p)"
+    case "$dev" in
+    */CommandLineTools)
+        fw="$dev/Library/Developer/Frameworks"
+        lib="$dev/Library/Developer/usr/lib"
+        printf '%s\n' -Xswiftc -F -Xswiftc "$fw" -Xlinker -F -Xlinker "$fw" \
+            -Xlinker -rpath -Xlinker "$fw" -Xlinker -rpath -Xlinker "$lib"
+        ;;
+    esac
+}
+
+sources="Package.swift Sources Tests scripts/make-icon.swift"
+
+case "${1:-}" in
+fmt)
+    echo "==> formatting"
+    # shellcheck disable=SC2086
+    swift format --in-place --recursive $sources
+    ;;
+fmt:check)
+    echo "==> checking format"
+    # shellcheck disable=SC2086
+    swift format lint --strict --recursive $sources
+    ;;
+lint)
+    "$0" fmt:check
+    echo "==> building with warnings as errors"
+    swift build -Xswiftc -warnings-as-errors
+    ;;
+test)
+    echo "==> running tests"
+    # shellcheck disable=SC2046
+    swift test $(test_flags)
+    ;;
+build)
+    # One build per architecture, joined with lipo: `--arch a --arch b`
+    # needs Xcode's build system, which Command Line Tools lack.
+    bins=""
+    for arch in arm64 x86_64; do
+        echo "==> building release for $arch"
+        swift build -c release --triple "$arch-apple-macosx14.0"
+        bins="$bins $(swift build -c release --triple "$arch-apple-macosx14.0" --show-bin-path)/Zipboy"
+    done
+    app="build/Zipboy.app"
+    echo "==> assembling $app"
+    rm -rf "$app"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+    # shellcheck disable=SC2086
+    lipo -create $bins -output "$app/Contents/MacOS/Zipboy"
+    cp Resources/Info.plist "$app/Contents/"
+    cp Resources/AppIcon.icns "$app/Contents/Resources/"
+    codesign --force --sign - --options runtime "$app"
+    echo "==> built $app"
+    ;;
+check)
+    "$0" lint
+    "$0" test
+    "$0" build
+    ;;
+*)
+    echo "usage: scripts/task {fmt|fmt:check|lint|test|build|check}" >&2
+    exit 2
+    ;;
+esac

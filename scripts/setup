@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+# One-time setup after cloning: wire the tracked git hooks.
+
+cd "$(dirname "$0")/.."
+echo "==> setting core.hooksPath to .githooks"
+git config core.hooksPath .githooks
+echo "==> done; run 'scripts/agent doctor' to check the rest"

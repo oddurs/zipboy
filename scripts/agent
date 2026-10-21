@@ -1,0 +1,121 @@
+#!/bin/sh
+set -eu
+
+# The workflow: one unit of work, one worktree, one branch, one PR.
+# Commands: doctor start check commit pr sync done list
+
+root="$(git rev-parse --show-toplevel)"
+repo="$(basename "$(git -C "$root" rev-parse --path-format=absolute --git-common-dir | xargs dirname)")"
+worktrees="$(dirname "$(git -C "$root" rev-parse --path-format=absolute --git-common-dir | xargs dirname)")/.worktrees/$repo"
+
+die() {
+    echo "agent: $*" >&2
+    exit 1
+}
+
+default_branch() {
+    ref="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)" || {
+        git remote set-head origin --auto >/dev/null 2>&1 || die "cannot resolve origin's default branch; is 'origin' set?"
+        ref="$(git symbolic-ref refs/remotes/origin/HEAD)"
+    }
+    echo "${ref#refs/remotes/origin/}"
+}
+
+current_branch() { git rev-parse --abbrev-ref HEAD; }
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+doctor)
+    problems=0
+    report() {
+        echo "  ✗ $*"
+        problems=$((problems + 1))
+    }
+    echo "==> checking tools"
+    for tool in git gh swift; do
+        if command -v "$tool" >/dev/null 2>&1; then echo "  ✓ $tool"; else report "$tool not found on PATH"; fi
+    done
+    if gh auth status >/dev/null 2>&1; then echo "  ✓ gh authenticated"; else report "gh not authenticated: run 'gh auth login'"; fi
+    if swift format --version >/dev/null 2>&1; then echo "  ✓ swift format"; else report "swift format unavailable: install Swift 6 or later"; fi
+    echo "==> checking repository"
+    if [ "$(git config core.hooksPath || true)" = ".githooks" ]; then
+        echo "  ✓ hooks path"
+    else
+        echo "  … setting core.hooksPath to .githooks"
+        git config core.hooksPath .githooks
+    fi
+    if [ -z "$(git status --porcelain)" ]; then echo "  ✓ clean tree"; else report "uncommitted changes in $(pwd)"; fi
+    [ "$problems" -eq 0 ] || die "$problems problem(s) found"
+    echo "==> all good"
+    ;;
+start)
+    branch="${1:-}"
+    echo "$branch" | grep -Eq '^(feat|fix|chore|docs|perf|refactor|test)/[a-z0-9][a-z0-9._-]*$' ||
+        die "branch must look like <type>/<slug>, type one of feat fix chore docs perf refactor test (got '$branch')"
+    path="$worktrees/$branch"
+    git show-ref --verify --quiet "refs/heads/$branch" && die "branch $branch already exists"
+    [ -e "$path" ] && die "worktree path $path already exists"
+    base="$(default_branch)"
+    echo "==> fetching origin"
+    git fetch --quiet origin
+    echo "==> creating $branch from origin/$base at $path"
+    mkdir -p "$(dirname "$path")"
+    git worktree add --quiet -b "$branch" "$path" "origin/$base"
+    git -C "$path" branch --quiet --unset-upstream 2>/dev/null || :
+    echo "cd $path"
+    ;;
+check)
+    exec "$root/scripts/task" check
+    ;;
+commit)
+    [ $# -ge 1 ] || die "usage: scripts/agent commit '<type>(scope): subject' [body]"
+    echo "==> committing"
+    if [ $# -ge 2 ]; then git commit -m "$1" -m "$2"; else git commit -m "$1"; fi
+    ;;
+pr)
+    branch="$(current_branch)"
+    [ "$branch" != "$(default_branch)" ] || die "on the default branch; start a branch with 'scripts/agent start'"
+    echo "==> checking"
+    "$root/scripts/task" check
+    echo "==> pushing $branch"
+    git push --quiet -u origin "$branch"
+    echo "==> opening pull request"
+    gh pr create --fill "$@"
+    ;;
+sync)
+    base="$(default_branch)"
+    echo "==> rebasing $(current_branch) onto origin/$base"
+    git fetch --quiet origin
+    git rebase "origin/$base"
+    ;;
+done)
+    branch="$(current_branch)"
+    base="$(default_branch)"
+    [ "$branch" != "$base" ] || die "run 'done' from the branch's worktree"
+    state="$(gh pr view "$branch" --json state --jq .state 2>/dev/null)" || die "no pull request found for $branch"
+    [ "$state" = "MERGED" ] || die "pull request for $branch is $state, not MERGED"
+    path="$(pwd)"
+    main="$(git rev-parse --path-format=absolute --git-common-dir | xargs dirname)"
+    echo "==> removing worktree $path"
+    git -C "$main" worktree remove "$path"
+    echo "==> deleting local branch $branch"
+    git -C "$main" branch --quiet -D "$branch"
+    git -C "$main" worktree prune
+    git -C "$main" fetch --quiet --prune origin
+    echo "==> done; cd $main"
+    ;;
+list)
+    git worktree list | while read -r path _ rest; do
+        branch="$(echo "$rest" | sed -n 's/.*\[\(.*\)\].*/\1/p')"
+        state="-"
+        [ -n "$branch" ] && state="$(gh pr view "$branch" --json state --jq .state 2>/dev/null || echo "no PR")"
+        printf '%-50s %-40s %s\n' "$path" "${branch:-detached}" "$state"
+    done
+    ;;
+*)
+    echo "usage: scripts/agent {doctor|start <type>/<slug>|check|commit <msg> [body]|pr [--draft]|sync|done|list}" >&2
+    exit 2
+    ;;
+esac

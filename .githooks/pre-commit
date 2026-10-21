@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo "pre-commit: lint"
+exec scripts/task lint

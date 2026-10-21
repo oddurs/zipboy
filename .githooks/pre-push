@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+# The default branch advances only through merged pull requests. The one
+# exception is the push that creates it on a brand-new remote.
+
+remote="$1"
+default="$(git symbolic-ref --quiet "refs/remotes/$remote/HEAD" 2>/dev/null | sed "s|^refs/remotes/$remote/||")" || default=""
+[ -n "$default" ] || default="$(git config init.defaultBranch || echo main)"
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    if [ "$remote_ref" = "refs/heads/$default" ] && git ls-remote --exit-code --heads "$remote" "$default" >/dev/null 2>&1; then
+        echo "pre-push: refusing to push to $default; open a pull request (scripts/agent pr)" >&2
+        exit 1
+    fi
+done
+
+echo "pre-push: full check"
+exec scripts/task check

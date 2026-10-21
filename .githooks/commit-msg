@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+# Conventional Commits, subject at most 72 characters, no trailing period,
+# and no assistant or tool attribution anywhere in the message.
+
+file="$1"
+subject="$(sed -n '/^[^#]/{p;q;}' "$file")"
+
+if ! printf '%s\n' "$subject" | grep -Eq '^(feat|fix|chore|docs|perf|refactor|test|build|ci|style|revert)(\([a-z0-9._/-]+\))?!?: [^ ].*[^.]$'; then
+    echo "commit-msg: subject must be a Conventional Commit, e.g. 'fix(cpu): handle tick wraparound'" >&2
+    echo "commit-msg: got: $subject" >&2
+    exit 1
+fi
+if [ "${#subject}" -gt 72 ]; then
+    echo "commit-msg: subject is ${#subject} characters; keep it to 72" >&2
+    exit 1
+fi
+if grep -v '^#' "$file" | grep -Eiq 'co-authored-by:.*(claude|anthropic|copilot|gpt|openai|noreply@anthropic)|generated (with|by) .*(claude|ai|copilot|chatgpt)|🤖'; then
+    echo "commit-msg: remove the attribution line; work is published under the author's name" >&2
+    exit 1
+fi
