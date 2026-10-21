@@ -4,13 +4,12 @@
 
 ## v0.1 — First release
 
-`#·········` 9% · 1 of 11 done · due 2026-11-20
+`##········` 18% · 2 of 11 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
 
 ### backlog
 
-- [ ] `0008` Run scripts/task check in CI on every pull request <sup>chore · p0 · quality</sup>
 - [ ] `0009` Can Command Line Tools alone sign, notarize, and staple a release? <sup>spike · p0 · distribution</sup>
 - [ ] `0010` Release workflow: a tag produces a notarized DMG on GitHub Releases <sup>feature · p0 · distribution</sup>
 - [ ] `0011` Launching a second Zipboy deletes the first one's open archives <sup>bug · p1 · document</sup>
@@ -27,6 +26,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 ### done
 
 - [x] `0007` Put Zipboy under git with the agent workflow <sup>chore · p0 · quality</sup>
+- [x] `0008` Run scripts/task check in CI on every pull request <sup>chore · p0 · quality</sup>
 
 ## v0.2 — Saves in seconds
 
