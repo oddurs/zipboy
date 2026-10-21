@@ -4,7 +4,7 @@
 
 ## v0.1 — First release
 
-`####······` 36% · 4 of 11 done · due 2026-11-20
+`#####·····` 45% · 5 of 11 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
 
@@ -14,7 +14,6 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [ ] `0010` Release workflow: a tag produces a notarized DMG on GitHub Releases <sup>feature · p0 · distribution</sup>
 - [ ] `0013` Which archive variants does Apple's libarchive actually read? <sup>spike · p0 · archive</sup>
 - [ ] `0014` Fixture matrix: every supported variant opens and round-trips <sup>feature · p0 · quality</sup>
-- [ ] `0015` Test the save path: snapshots, cancelled autosaves, and re-encryption <sup>feature · p1 · quality</sup>
 - [ ] `0016` README: install, what it does, and screenshots <sup>docs · p1 · distribution</sup>
 
 ### blocked
@@ -27,6 +26,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [x] `0008` Run scripts/task check in CI on every pull request <sup>chore · p0 · quality</sup>
 - [x] `0011` Launching a second Zipboy deletes the first one's open archives <sup>bug · p1 · document</sup>
 - [x] `0012` Check free space before unpacking <sup>feature · p1 · document</sup>
+- [x] `0015` Test the save path: snapshots, cancelled autosaves, and re-encryption <sup>feature · p1 · quality</sup>
 
 ## v0.2 — Saves in seconds
 
