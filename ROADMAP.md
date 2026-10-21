@@ -4,7 +4,7 @@
 
 ## v0.1 — First release
 
-`#####·····` 45% · 5 of 11 done · due 2026-11-20
+`#####·····` 43% · 6 of 14 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
 
@@ -12,9 +12,11 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 - [ ] `0009` Can Command Line Tools alone sign, notarize, and staple a release? <sup>spike · p0 · distribution</sup>
 - [ ] `0010` Release workflow: a tag produces a notarized DMG on GitHub Releases <sup>feature · p0 · distribution</sup>
-- [ ] `0013` Which archive variants does Apple's libarchive actually read? <sup>spike · p0 · archive</sup>
 - [ ] `0014` Fixture matrix: every supported variant opens and round-trips <sup>feature · p0 · quality</sup>
 - [ ] `0016` README: install, what it does, and screenshots <sup>docs · p1 · distribution</sup>
+- [ ] `0054` A single gzipped file opens as a bogus mtree listing <sup>bug · p2 · archive</sup>
+- [ ] `0055` Encrypted 7z and RAR archives ask for a password forever <sup>bug · p1 · archive</sup>
+- [ ] `0056` Names in old ZIPs without the UTF-8 flag show as � <sup>bug · p1 · archive</sup>
 
 ### blocked
 
@@ -26,11 +28,12 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [x] `0008` Run scripts/task check in CI on every pull request <sup>chore · p0 · quality</sup>
 - [x] `0011` Launching a second Zipboy deletes the first one's open archives <sup>bug · p1 · document</sup>
 - [x] `0012` Check free space before unpacking <sup>feature · p1 · document</sup>
+- [x] `0013` Which archive variants does Apple's libarchive actually read? <sup>spike · p0 · archive</sup>
 - [x] `0015` Test the save path: snapshots, cancelled autosaves, and re-encryption <sup>feature · p1 · quality</sup>
 
 ## v0.2 — Saves in seconds
 
-`··········` 0% · 0 of 8 done · due 2026-12-18
+`··········` 0% · 0 of 9 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
@@ -44,6 +47,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [ ] `0022` Benchmarks with budgets for opening, listing, and saving <sup>feature · p1 · quality</sup>
 - [ ] `0023` Readable errors for every failure a user can hit <sup>feature · p1 · document</sup>
 - [ ] `0024` Show the version and build from the release tag in About <sup>feature · p2 · shell</sup>
+- [ ] `0057` Read Deflate64 ZIPs, which Windows makes for large files <sup>feature · p2 · archive</sup>
 
 ## v0.3 — Opens instantly
 
