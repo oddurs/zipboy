@@ -194,6 +194,23 @@ import Testing
         }
     }
 
+    @Test func stopsBeforeFillingTheDisk() throws {
+        let source = try folder("source")
+        try write("small", to: "a.txt", in: source)
+        try Data(repeating: 1, count: 3 << 20).write(to: source.appendingPathComponent("big.bin"))
+        let zip = dir.appendingPathComponent("out.zip")
+        try Archive.writeZip(from: source, to: zip)
+
+        let root = try folder("root")
+        // A volume with 1 MB free, less the reserve, can't take a 3 MB file.
+        #expect(throws: ArchiveError.noSpace(needed: 3 << 20, available: 1 << 20)) {
+            try Archive.extract(zip, into: root, capacity: { 1 << 20 })
+        }
+        // Nothing half-written is left for the big file.
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("big.bin").path))
+        #expect(ArchiveError.noSpace(needed: 3 << 20, available: 1 << 20).errorDescription?.contains("3.1 MB") == true)
+    }
+
     @Test func reportsGarbage() throws {
         let junk = dir.appendingPathComponent("junk.zip")
         try Data("not an archive".utf8).write(to: junk)

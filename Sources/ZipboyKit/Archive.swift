@@ -7,6 +7,8 @@ public enum ArchiveError: LocalizedError, Equatable {
     case unreadable(String)
     case unwritable(String)
     case cancelled
+    /// The next entry needs `needed` bytes and the volume has `available`.
+    case noSpace(needed: Int64, available: Int64)
 
     public var errorDescription: String? {
         switch self {
@@ -15,7 +17,13 @@ public enum ArchiveError: LocalizedError, Equatable {
         case .unreadable(let why): "The archive couldn’t be read. \(why)"
         case .unwritable(let why): "The archive couldn’t be written. \(why)"
         case .cancelled: "Cancelled."
+        case .noSpace(let needed, let available):
+            "There isn’t enough space on the disk. It needs at least \(Self.size(needed)), and \(Self.size(available)) is free."
         }
+    }
+
+    private static func size(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
 
@@ -33,10 +41,14 @@ public enum Archive {
 
     /// Unpacks `archive` into the empty directory `root`. Entries that would land outside `root`, through
     /// `..`, an absolute path, or a symlink, are skipped rather than trusted. `progress` hears the share of
-    /// the file read so far, from 0 to 1, and stops the work by returning false.
+    /// the file read so far, from 0 to 1, and stops the work by returning false. Each file is checked
+    /// against `capacity`, the free bytes on `root`'s volume, before it is written, so a full disk stops
+    /// the work cleanly instead of partway through a file.
     public static func extract(
-        _ archive: URL, into root: URL, password: String? = nil, progress: ((Double) -> Bool)? = nil
+        _ archive: URL, into root: URL, password: String? = nil, progress: ((Double) -> Bool)? = nil,
+        capacity: (() -> Int64?)? = nil
     ) throws -> ExtractSummary {
+        let capacity = capacity ?? { freeSpace(on: root) }
         useUTF8Names()
         guard let a = archive_read_new() else { throw ArchiveError.unreadable("Out of memory.") }
         defer { archive_read_free(a) }
@@ -53,6 +65,9 @@ public enum Archive {
             guard progress(min(1, Double(archive_filter_bytes(a, -1)) / total)) else { throw ArchiveError.cancelled }
         }
 
+        // Asking the volume is slow-ish, so ask once and count down, and ask again only when a file
+        // might not fit.
+        var budget = capacity()
         var summary = ExtractSummary(format: "", encrypted: false, skipped: [])
         var folders: [(URL, Date)] = []
         let fm = FileManager.default
@@ -106,6 +121,12 @@ public enum Archive {
                     try? fm.removeItem(at: url)
                     try fm.createSymbolicLink(atPath: url.path, withDestinationPath: target)
                 case AE_IFREG:
+                    let size = archive_entry_size(entry)
+                    if let known = budget, size > known {
+                        let fresh = capacity() ?? known
+                        budget = fresh
+                        if size > fresh { throw ArchiveError.noSpace(needed: size, available: fresh) }
+                    }
                     try? fm.removeItem(at: url)
                     guard fm.createFile(atPath: url.path, contents: nil) else {
                         throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
@@ -119,7 +140,15 @@ public enum Archive {
                             if encrypted { throw ArchiveError.wrongPassword }
                             throw ArchiveError.unreadable(message(a))
                         }
-                        try out.write(contentsOf: buffer[0..<n])
+                        do {
+                            try out.write(contentsOf: buffer[0..<n])
+                        } catch let error as CocoaError where error.code == .fileWriteOutOfSpace {
+                            // A size the archive didn't declare, or space taken meanwhile by something else.
+                            try? out.close()
+                            try? fm.removeItem(at: url)
+                            throw ArchiveError.noSpace(needed: size, available: capacity() ?? 0)
+                        }
+                        budget = budget.map { $0 - Int64(n) }
                         try report()
                     }
                     var attributes: [FileAttributeKey: Any] = [.posixPermissions: perm | 0o600]
@@ -234,6 +263,11 @@ public enum Archive {
         }
         try walk("")
         return paths
+    }
+
+    static func freeSpace(on url: URL) -> Int64? {
+        (try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage
     }
 
     private static func check(_ status: Int32, _ a: OpaquePointer) throws {
