@@ -221,6 +221,23 @@ import Testing
         #expect(throws: ArchiveError.self) { try Archive.extract(gz, into: try folder("gz")) }
     }
 
+    /// libarchive can't decrypt 7z or RAR. Asking for a password would loop forever, since every answer
+    /// fails; the error must say the archive can't be opened at all.
+    @Test(arguments: ["encrypted.7z", "encrypted-data.rar", "encrypted-header.rar"])
+    func saysWhenEncryptionIsUnsupported(_ name: String) throws {
+        let (base, ext) = ((name as NSString).deletingPathExtension, (name as NSString).pathExtension)
+        let url = try #require(Bundle.module.url(forResource: base, withExtension: ext, subdirectory: "Fixtures"))
+        for password in [nil, "secret"] as [String?] {
+            do {
+                _ = try Archive.extract(url, into: try folder("\(name)-\(password ?? "none")"), password: password)
+                Issue.record("\(name) opened without being decrypted")
+            } catch let error as ArchiveError {
+                #expect(error != .passwordRequired && error != .wrongPassword, "\(name): \(error)")
+                #expect(error.errorDescription?.contains("encrypted") == true, "\(name): \(error)")
+            }
+        }
+    }
+
     @Test func reportsGarbage() throws {
         let junk = dir.appendingPathComponent("junk.zip")
         try Data("not an archive".utf8).write(to: junk)
