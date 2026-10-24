@@ -7,12 +7,16 @@ set -eu
 file="$1"
 subject="$(sed -n '/^[^#]/{p;q;}' "$file")"
 
-if ! printf '%s\n' "$subject" | grep -Eq '^(feat|fix|chore|docs|perf|refactor|test|build|ci|style|revert)(\([a-z0-9._/-]+\))?!?: [^ ].*[^.]$'; then
+# Messages git writes itself pass the subject rules, but not the attribution check below.
+git_written=false
+if printf '%s\n' "$subject" | grep -Eq '^(Merge |Revert "|fixup! |squash! |amend! )'; then
+    git_written=true
+elif ! printf '%s\n' "$subject" | grep -Eq '^(feat|fix|chore|docs|perf|refactor|test|build|ci|style|revert)(\([a-z0-9._/-]+\))?!?: [^ ].*[^.]$'; then
     echo "commit-msg: subject must be a Conventional Commit, e.g. 'fix(cpu): handle tick wraparound'" >&2
     echo "commit-msg: got: $subject" >&2
     exit 1
 fi
-if [ "${#subject}" -gt 72 ]; then
+if [ "$git_written" = false ] && [ "${#subject}" -gt 72 ]; then
     echo "commit-msg: subject is ${#subject} characters; keep it to 72" >&2
     exit 1
 fi

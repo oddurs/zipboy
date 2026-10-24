@@ -38,9 +38,10 @@ lint)
     swift build -Xswiftc -warnings-as-errors
     ;;
 test)
-    echo "==> running tests"
+    # An optional second argument runs only the tests whose names match it.
+    echo "==> running tests${2:+ matching $2}"
     # shellcheck disable=SC2046
-    swift test $(test_flags)
+    swift test $(test_flags) ${2:+--filter "$2"}
     ;;
 build)
     # One build per architecture, joined with lipo: `--arch a --arch b`
@@ -96,7 +97,7 @@ check)
     "$0" build
     ;;
 *)
-    echo "usage: scripts/task {fmt|fmt:check|lint|test|build|check|package <version>}" >&2
+    echo "usage: scripts/task {fmt|fmt:check|lint|test [filter]|build|check|package <version>}" >&2
     exit 2
     ;;
 esac

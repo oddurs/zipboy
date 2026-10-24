@@ -1,38 +1,40 @@
 # Working in this repository
 
-Zipboy is a native macOS archive app in Swift (AppKit, no package dependencies). It unpacks an
-archive into a temporary workspace, shows it in an outline view with a Quick Look inspector, and
-zips the workspace back up as it autosaves. The aim is an Apple-grade app: few visible choices,
-nothing to manage.
+Zipboy is a native macOS archive app in Swift: AppKit, Command Line Tools only, no package
+dependencies. It unpacks an archive into a temporary workspace, shows it in an outline view with a
+Quick Look inspector, and zips the workspace back up as it autosaves. The aim is an Apple-grade app:
+few visible choices, nothing to manage.
 
-## The seam
+## Commands
 
-Do all automation through `scripts/task`: `fmt fmt:check lint test build check`.
+All automation goes through `scripts/task`; CI and the hooks call nothing else.
 
-## Code
+```sh
+scripts/task check            # fmt:check, lint (warnings are errors), test, universal build
+scripts/task test <name>      # one test or suite
+scripts/task fmt              # swift format, in place
+scripts/task package 0.2.0    # build/Zipboy-0.2.0.dmg, as a release ships it
+```
 
-- `Sources/CArchive` declares the part of libarchive we call. macOS ships `libarchive.dylib` but
-  not its headers. Keep the declarations matching libarchive 3.x.
-- `Sources/ZipboyKit` holds everything testable without a window: extraction and ZIP writing
-  (`Archive`), path safety and Finder-metadata rules (`EntryPath`), Finder's "Keep Both" naming
-  (`Naming`), store-vs-deflate (`ZipMethod`), and the file tree (`Node`). A behaviour change goes
-  here with a test first.
-- `Sources/Zipboy` is the app shell. `ArchiveDocument` is an `NSDocument` that autosaves in place.
-  `read` only records the URL; the window opens at once and unpacks off the main thread, with a
-  progress bar and a password sheet. Saving clones the workspace (APFS `clonefile`), unblocks the
-  UI, and zips the clone in the background; an edit cancels an autosave in flight. Every edit is a
-  list of renames inside the workspace (`Move`), so undo replays them backwards. A `FileWatcher`
-  marks the document edited when another app saves into the workspace.
-- A format that can't be written (RAR, 7z, tar) opens as a new untitled ZIP named after the
-  original (`importedFrom`), as Pages imports a Word file. Never give such a document the
-  original's `fileURL`: autosave would replace the RAR with a ZIP.
-- `AppDelegate.application(_:open:)` sends anything that isn't an archive into a new archive,
-  which is how dropping files on the Dock icon works. Its catch-all document type has rank None.
-- Apple's libarchive decomposes names passed to `archive_entry_set_pathname_utf8`, so the writer
-  uses the locale setter with NFC names. The process locale is set to UTF-8 on first use.
-- The menu bar is built in code (`MainMenu`), since Command Line Tools can't compile nibs.
-- The app icon comes from `swift scripts/make-icon.swift`. Edit the script, not the images.
-- A bug fix comes with the test that would have caught it.
+## Where code goes
+
+- `Sources/ZipboyKit`: everything that can be tested without a window. A behaviour change goes here
+  with a test first.
+- `Sources/Zipboy`: the app shell. `Sources/CArchive`: the libarchive declarations.
+- Path-specific rules load from `.claude/rules/` when you touch those files. Procedures (releasing,
+  fixtures, running the app for screenshots) are skills in `.claude/skills/`.
+
+## Workflow
+
+- Never commit to `main`. It advances only through a merged pull request; GitHub enforces it too.
+- One unit of work, one worktree, one branch, one PR: `scripts/agent start fix/0042-the-thing`, then
+  `scripts/agent commit`, `scripts/agent pr`, and `scripts/agent done` after the merge.
+- Branch `<type>/<item>-<slug>`, type one of `feat fix chore docs perf refactor test`, item from cairn.
+- `scripts/task check` must pass before a PR. The hooks enforce it; never `--no-verify`.
+- Conventional Commits: imperative subject of at most 72 characters, no trailing period, the body says
+  why, and a `Refs:` trailer with the cairn item's uid. Merges are squashes.
+- A bug fix comes with the test that fails without it.
+- No AI or assistant attribution in commits, PRs, comments, or docs.
 
 <!-- cairn:begin -->
 ## Roadmap and issues
