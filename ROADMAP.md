@@ -4,9 +4,13 @@
 
 ## v0.1 — First release
 
-`##########` 94% · 15 of 16 done · due 2026-11-20
+`#########·` 88% · 15 of 17 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
+
+### in progress
+
+- [ ] `0061` License Zipboy under MIT <sup>docs · p1 · distribution</sup>
 
 ### blocked
 
