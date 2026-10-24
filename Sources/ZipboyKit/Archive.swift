@@ -109,7 +109,7 @@ public enum Archive {
             }
             if encrypted && password == nil { throw ArchiveError.passwordRequired }
 
-            let raw = string(archive_entry_pathname_utf8(entry)) ?? string(archive_entry_pathname(entry)) ?? ""
+            let raw = name(of: entry, in: a)
             guard let path = EntryPath.sanitized(raw), !hasLinkAbove(path, in: root) else {
                 summary.skipped.append(raw)
                 archive_read_data_skip(a)
@@ -314,6 +314,10 @@ public enum Archive {
     /// Only libarchive's ZIP reader decrypts. Its "encryption" capability flags say only that a reader
     /// can tell an entry is encrypted, which the 7z and RAR readers can, so they can't decide this.
     private static func canDecrypt(_ a: OpaquePointer) -> Bool {
+        isZip(a)
+    }
+
+    private static func isZip(_ a: OpaquePointer) -> Bool {
         archive_format(a) & ARCHIVE_FORMAT_BASE_MASK == ARCHIVE_FORMAT_ZIP
     }
 
@@ -323,6 +327,21 @@ public enum Archive {
         let short = name.split(separator: " (").first.map(String.init) ?? name
         return short.isEmpty ? "this kind of" : short
     }
+
+    /// An entry's name as text. ZIPs written without the UTF-8 flag hold either UTF-8, as macOS's own
+    /// tools write, or code page 437, as the ZIP specification says and older Windows tools write; bytes
+    /// that aren't valid UTF-8 are read as CP437 rather than shown as "�".
+    private static func name(of entry: OpaquePointer, in a: OpaquePointer) -> String {
+        if isZip(a), let stored = archive_entry_pathname(entry) {
+            let bytes = Data(bytes: stored, count: strlen(stored))
+            if let text = String(data: bytes, encoding: .utf8) { return text }
+            if let text = String(data: bytes, encoding: codePage437) { return text }
+        }
+        return string(archive_entry_pathname_utf8(entry)) ?? string(archive_entry_pathname(entry)) ?? ""
+    }
+
+    private static let codePage437 = String.Encoding(
+        rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.dosLatinUS.rawValue)))
 
     private static func isPasswordProblem(_ a: OpaquePointer) -> Bool {
         let text = message(a).lowercased()
