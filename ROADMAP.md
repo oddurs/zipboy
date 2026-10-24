@@ -10,8 +10,11 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ### backlog
 
-- [ ] `0010` Release workflow: a tag produces a DMG on GitHub Releases <sup>feature · p0 · distribution</sup>
 - [ ] `0016` README: install, what it does, and screenshots <sup>docs · p1 · distribution</sup>
+
+### in progress
+
+- [ ] `0010` Release workflow: a tag produces a DMG on GitHub Releases <sup>feature · p0 · distribution</sup>
 
 ### blocked
 
