@@ -24,6 +24,10 @@ The MIT License, as in the owner's other projects, with a License section in the
 
 ## Acceptance criteria
 
-- [ ] `LICENSE` holds the MIT text with "Copyright (c) 2026 Oddur Sigurdsson"
+- [x] `LICENSE` holds the MIT text with "Copyright (c) 2026 Oddur Sigurdsson"
 - [ ] GitHub detects the license as MIT
-- [ ] The README says how Zipboy is licensed and that the vendored test fixtures keep their own licenses
+- [x] The README says how Zipboy is licensed and that the vendored test fixtures keep their own licenses
+
+## 2026-10-24
+
+LICENSE is common-shot's MIT text, 'Copyright (c) 2026 Oddur Sigurdsson'; the README has a License section crediting the fixtures' own licenses. GitHub's license detection only reads the default branch (the API answers 404 for this branch), so criterion 2 is checked after merge.
