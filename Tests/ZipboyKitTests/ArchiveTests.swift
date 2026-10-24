@@ -211,6 +211,16 @@ import Testing
         #expect(ArchiveError.noSpace(needed: 3 << 20, available: 1 << 20).errorDescription?.contains("3.1 MB") == true)
     }
 
+    @Test func refusesAGzippedFileThatIsNotAnArchive() throws {
+        // A line of text, as from `echo hello`; mtree reads each line as an entry.
+        try write("hello\n", to: "hello.txt", in: dir)
+        let gz = dir.appendingPathComponent("hello.gz")
+        let (status, out) = try run("/bin/sh", ["-c", "gzip -c '\(dir.path)/hello.txt' > '\(gz.path)'"])
+        #expect(status == 0, "\(out)")
+        // mtree, a text format for describing file trees, used to claim this as a one-entry archive.
+        #expect(throws: ArchiveError.self) { try Archive.extract(gz, into: try folder("gz")) }
+    }
+
     @Test func reportsGarbage() throws {
         let junk = dir.appendingPathComponent("junk.zip")
         try Data("not an archive".utf8).write(to: junk)

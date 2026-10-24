@@ -39,6 +39,13 @@ public struct ExtractSummary: Equatable, Sendable {
 public enum Archive {
     private static let chunk = 1 << 20
 
+    private static let formats: [@Sendable (OpaquePointer) -> Int32] = [
+        archive_read_support_format_7zip, archive_read_support_format_ar, archive_read_support_format_cab,
+        archive_read_support_format_cpio, archive_read_support_format_empty, archive_read_support_format_iso9660,
+        archive_read_support_format_lha, archive_read_support_format_rar, archive_read_support_format_rar5,
+        archive_read_support_format_tar, archive_read_support_format_xar, archive_read_support_format_zip,
+    ]
+
     /// Unpacks `archive` into the empty directory `root`. Entries that would land outside `root`, through
     /// `..`, an absolute path, or a symlink, are skipped rather than trusted. `progress` hears the share of
     /// the file read so far, from 0 to 1, and stops the work by returning false. Each file is checked
@@ -53,7 +60,9 @@ public enum Archive {
         guard let a = archive_read_new() else { throw ArchiveError.unreadable("Out of memory.") }
         defer { archive_read_free(a) }
         archive_read_support_filter_all(a)
-        archive_read_support_format_all(a)
+        // Container formats only. "All" would include mtree, a text format for describing file trees,
+        // which claims plain text files as archives of empty entries.
+        for support in formats { _ = support(a) }
         if let password { archive_read_add_passphrase(a, password) }
         guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else {
             throw ArchiveError.unreadable(message(a))
