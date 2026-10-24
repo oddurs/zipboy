@@ -24,6 +24,8 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     /// Paths being dragged from this list, to tell a move inside the archive from an add.
     private var dragged: [String] = []
     private var shownOnce = false
+    /// Kept so it can come back after an empty archive hides it.
+    private var header: NSTableHeaderView?
     /// Picture previews for the name column, keyed by path and date so an edited file gets a new one.
     private var thumbnails: [String: NSImage] = [:]
     private var requested: Set<String> = []
@@ -45,10 +47,15 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         addColumn(Self.kindColumn, "Kind", width: 140, min: 60, key: .kind)
         outline.outlineTableColumn = outline.tableColumns.first
         outline.style = .fullWidth
-        outline.usesAlternatingRowBackgroundColors = true
+        // No stripes: they draw rows that aren't there behind an empty archive. Taller rows, and no gap
+        // between them, so neighbouring selections join into one capsule.
+        outline.usesAlternatingRowBackgroundColors = false
+        outline.rowHeight = 26
+        outline.intercellSpacing = NSSize(width: 3, height: 0)
         outline.allowsMultipleSelection = true
         outline.autoresizesOutlineColumn = false
-        outline.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        // The last column takes up the slack, so rows end where the list does.
+        outline.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         outline.autosaveName = "ArchiveColumns"
         outline.autosaveTableColumns = true
         // Before the delegate is set, which would hear of it and reload a list that isn't loaded yet.
@@ -64,11 +71,20 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         outline.menu = NSMenu()
         outline.menu?.delegate = self
 
+        header = outline.headerView
+        outline.onDragDone = { [weak self] in self?.dropEnded() }
+
         // Inside the outline, so a drop on the message still lands on the list.
         empty.frame = outline.bounds
         empty.autoresizingMask = [.width, .height]
         outline.addSubview(empty)
         view = scroll
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        // Widths saved from a wider window would push the last column, and the rows, past the edge.
+        outline.sizeLastColumnToFit()
     }
 
     private func addColumn(
@@ -92,6 +108,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         if let done = document?.loading {
             empty.mode = .loading(done)
             empty.isHidden = false
+            showHeader(false)
             return
         }
         guard let tree = document?.tree else { return }
@@ -115,7 +132,16 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
 
         empty.isHidden = shown?.children.isEmpty == false
         empty.mode = query.isEmpty ? .drop : .noResults
+        // Column headers over nothing are noise; they come back with the first item.
+        showHeader(tree.children.isEmpty == false)
         selectionChanged()
+    }
+
+    private func showHeader(_ show: Bool) {
+        let wanted = show ? header : nil
+        guard outline.headerView !== wanted else { return }
+        outline.headerView = wanted
+        outline.enclosingScrollView?.tile()
     }
 
     func filter(_ text: String) {
@@ -609,6 +635,21 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         return formatter.string(from: date)
     }
 
+    private func dropEnded() {
+        empty.highlighted = false
+        outline.rootDropGlow = false
+        outline.draggingDestinationFeedbackStyle = .regular
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        outlineView.makeView(withIdentifier: ArchiveRowView.reuse, owner: self) as? ArchiveRowView
+            ?? {
+                let row = ArchiveRowView()
+                row.identifier = ArchiveRowView.reuse
+                return row
+            }()
+    }
+
     func outlineViewSelectionDidChange(_ notification: Notification) {
         selectionChanged()
     }
@@ -645,6 +686,12 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         if let node = folder, !node.isDirectory { folder = node.parent }
         if folder?.path.isEmpty == true { folder = nil }
         outlineView.setDropItem(folder, dropChildIndex: NSOutlineViewDropOnItemIndex)
+        // A drop on a folder lights its row; a drop on the archive itself lights the tray when it's
+        // empty, or the whole list's edge when it isn't.
+        let onRoot = folder == nil
+        outline.draggingDestinationFeedbackStyle = onRoot ? .none : .regular
+        empty.highlighted = onRoot && !empty.isHidden
+        outline.rootDropGlow = onRoot && empty.isHidden
 
         guard info.draggingSource as? NSOutlineView === outline else { return .copy }
         let destination = folder?.path ?? ""
@@ -737,6 +784,35 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
 /// and Delete to remove.
 @MainActor
 final class BrowserOutlineView: NSOutlineView {
+    /// Hears when a drag leaves or finishes, so highlights can go.
+    var onDragDone: (() -> Void)?
+
+    /// An orange edge round the visible list while a drop would land in the archive's top level.
+    var rootDropGlow = false {
+        didSet { if rootDropGlow != oldValue { needsDisplay = true } }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard rootDropGlow else { return }
+        let edge = NSBezierPath(roundedRect: visibleRect.insetBy(dx: 4, dy: 4), xRadius: 10, yRadius: 10)
+        Theme.dropFill.setFill()
+        edge.fill()
+        Theme.accent.setStroke()
+        edge.lineWidth = 2
+        edge.stroke()
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        super.draggingExited(sender)
+        onDragDone?()
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        super.draggingEnded(sender)
+        onDragDone?()
+    }
+
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         switch (event.keyCode, flags.subtracting([.numericPad, .function])) {
@@ -747,77 +823,5 @@ final class BrowserOutlineView: NSOutlineView {
         case (51, []), (117, []): NSApp.sendAction(#selector(BrowserViewController.delete(_:)), to: nil, from: self)
         default: super.keyDown(with: event)
         }
-    }
-}
-
-/// What an empty list says, so a new archive explains itself, and how far unpacking has got.
-@MainActor
-final class EmptyStateView: NSView {
-    enum Mode: Equatable {
-        case drop, noResults
-        case loading(Double)
-    }
-
-    private let symbol = NSImageView()
-    private let title = NSTextField(labelWithString: "")
-    private let detail = NSTextField(wrappingLabelWithString: "")
-    private let bar = NSProgressIndicator()
-
-    var mode = Mode.drop {
-        didSet { update() }
-    }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        symbol.symbolConfiguration = .init(pointSize: 44, weight: .light)
-        symbol.contentTintColor = .tertiaryLabelColor
-        title.font = .systemFont(ofSize: 17, weight: .semibold)
-        title.textColor = .secondaryLabelColor
-        detail.textColor = .tertiaryLabelColor
-        detail.alignment = .center
-        bar.style = .bar
-        bar.isIndeterminate = false
-        bar.minValue = 0
-        bar.maxValue = 1
-        bar.controlSize = .small
-        let stack = NSStackView(views: [symbol, title, detail, bar])
-        stack.orientation = .vertical
-        stack.spacing = 8
-        stack.setCustomSpacing(14, after: symbol)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -20),
-            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
-            bar.widthAnchor.constraint(equalToConstant: 220),
-        ])
-        update()
-    }
-
-    required init?(coder: NSCoder) { fatalError("EmptyStateView is built in code") }
-
-    /// Clicks and drops go through to the list underneath.
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    private func update() {
-        let symbolName: String
-        switch mode {
-        case .drop:
-            symbolName = "arrow.down.doc"
-            title.stringValue = "Drop Files Here"
-            detail.stringValue = "Drag in files and folders to make a zip."
-        case .noResults:
-            symbolName = "magnifyingglass"
-            title.stringValue = "No Results"
-            detail.stringValue = "Nothing in this archive matches."
-        case .loading(let done):
-            symbolName = "shippingbox"
-            title.stringValue = "Unpacking…"
-            detail.stringValue = "\(Int(done * 100))%"
-            bar.doubleValue = done
-        }
-        symbol.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
-        if case .loading = mode { bar.isHidden = false } else { bar.isHidden = true }
     }
 }
