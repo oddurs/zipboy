@@ -69,3 +69,8 @@ scripts/task build              # build/Zipboy.app, universal, ad hoc signed
 scripts/task check              # format check, lint, tests, build
 scripts/task package 0.1.0      # build/Zipboy-0.1.0.dmg, as a release ships it
 ```
+
+## License
+
+Zipboy is released under the [MIT License](LICENSE). The test fixtures from libarchive and Homebrew keep
+their own BSD licenses, credited in `Tests/ZipboyKitTests/Fixtures/README.md`.
