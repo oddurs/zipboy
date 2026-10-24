@@ -1,0 +1,194 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# ///
+"""Regenerates the archive fixtures in Tests/ZipboyKitTests/Fixtures/matrix.
+
+Each generated archive holds hello.txt ("hello\\n") and dir/world.txt ("world\\n"), with the password
+"secret" where it is encrypted. The RAR fixtures there are libarchive's and are not regenerated; nothing
+free can write RAR. Needs bsdtar, zip, gzip (all in macOS) and 7zz (`brew install sevenzip`).
+"""
+
+import io
+import shutil
+import subprocess
+import tempfile
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "Tests/ZipboyKitTests/Fixtures/matrix"
+FILES = ["hello.txt", "dir/world.txt"]
+
+
+def run(cmd: list[str], cwd: Path) -> None:
+    subprocess.run(cmd, cwd=cwd, check=True, capture_output=True)
+
+
+class Unseekable(io.RawIOBase):
+    """Makes zipfile write data descriptors, as a streaming writer does."""
+
+    def __init__(self, buffer: io.BytesIO) -> None:
+        self.buffer = buffer
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data: bytes) -> int:  # type: ignore[override]
+        return self.buffer.write(data)
+
+    def tell(self) -> int:
+        return self.buffer.tell()
+
+    def seekable(self) -> bool:
+        return False
+
+
+def python_zip(
+    name: str,
+    src: Path,
+    method: int = zipfile.ZIP_DEFLATED,
+    names: dict[str, str] | None = None,
+    zip64: bool = False,
+    stream: bool = False,
+) -> None:
+    buffer = io.BytesIO()
+    target = Unseekable(buffer) if stream else buffer
+    with zipfile.ZipFile(target, "w", compression=method) as archive:
+        for stored, real in (names or {f: f for f in FILES}).items():
+            data = (src / real).read_bytes()
+            if zip64:
+                with archive.open(stored, "w", force_zip64=True) as entry:
+                    entry.write(data)
+            else:
+                archive.writestr(stored, data)
+    (OUT / name).write_bytes(buffer.getvalue())
+
+
+def rename_entry(name: str, placeholder: str, raw: bytes) -> None:
+    """Puts raw name bytes in place of an ASCII placeholder in both headers, UTF-8 flag left clear."""
+    assert len(placeholder) == len(raw)
+    path = OUT / name
+    path.write_bytes(path.read_bytes().replace(placeholder.encode(), raw))
+
+
+def main() -> None:
+    if shutil.which("7zz") is None:
+        raise SystemExit("make-fixtures: 7zz not found; brew install sevenzip")
+    OUT.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp)
+        (src / "dir").mkdir()
+        (src / "hello.txt").write_text("hello\n")
+        (src / "dir/world.txt").write_text("world\n")
+        # Compressible enough that 7-Zip really uses Deflate64 rather than storing.
+        (src / "big.txt").write_text("zipboy " * 20_000)
+
+        def out(name: str) -> str:
+            path = OUT / name
+            path.unlink(missing_ok=True)
+            print(f"==> {name}")
+            return str(path)
+
+        bsd = ["bsdtar", "--format", "zip"]
+        run(
+            [
+                *bsd,
+                "--options",
+                "zip:compression=store",
+                "-cf",
+                out("zip-store.zip"),
+                *FILES,
+            ],
+            src,
+        )
+        run([*bsd, "-cf", out("zip-deflate.zip"), *FILES], src)
+        run(
+            [
+                *bsd,
+                "--options",
+                "zip:encryption=aes128",
+                "--passphrase",
+                "secret",
+                "-cf",
+                out("zip-aes128.zip"),
+                *FILES,
+            ],
+            src,
+        )
+        run(
+            [
+                *bsd,
+                "--options",
+                "zip:encryption=aes256",
+                "--passphrase",
+                "secret",
+                "-cf",
+                out("zip-aes256.zip"),
+                *FILES,
+            ],
+            src,
+        )
+        run(["zip", "-q", "-P", "secret", out("zip-zipcrypto.zip"), *FILES], src)
+        (src / "link").symlink_to("hello.txt")
+        run(["zip", "-q", "-y", out("zip-symlink.zip"), "hello.txt", "link"], src)
+        (src / "link").unlink()
+        run(
+            ["7zz", "a", "-tzip", "-mm=Deflate64", out("zip-deflate64.zip"), "big.txt"],
+            src,
+        )
+
+        out("zip-bzip2.zip")
+        python_zip("zip-bzip2.zip", src, zipfile.ZIP_BZIP2)
+        out("zip-lzma.zip")
+        python_zip("zip-lzma.zip", src, zipfile.ZIP_LZMA)
+        out("zip-zip64.zip")
+        python_zip("zip-zip64.zip", src, zip64=True)
+        out("zip-data-descriptor.zip")
+        python_zip("zip-data-descriptor.zip", src, stream=True)
+        out("zip-backslash.zip")
+        python_zip(
+            "zip-backslash.zip",
+            src,
+            names={"hello.txt": "hello.txt", "dir\\world.txt": "dir/world.txt"},
+        )
+        out("zip-cp437-name.zip")
+        python_zip("zip-cp437-name.zip", src, names={"Xber.txt": "hello.txt"})
+        rename_entry(
+            "zip-cp437-name.zip", "Xber.txt", b"\x81ber.txt"
+        )  # "über.txt" in code page 437
+        with zipfile.ZipFile(out("zip-empty.zip"), "w"):
+            pass
+
+        for name, options in [
+            ("7z-lzma2.7z", []),
+            ("7z-lzma.7z", ["-m0=LZMA"]),
+            ("7z-ppmd.7z", ["-m0=PPMd"]),
+            ("7z-bzip2.7z", ["-m0=BZip2"]),
+            ("7z-deflate.7z", ["-m0=Deflate"]),
+            ("7z-copy.7z", ["-m0=Copy"]),
+            ("7z-solid.7z", ["-ms=on"]),
+            ("7z-bcj.7z", ["-mf=BCJ"]),
+        ]:
+            run(["7zz", "a", "-t7z", *options, out(name), *FILES], src)
+
+        run(["bsdtar", "-cf", out("tar.tar"), *FILES], src)
+        run(["bsdtar", "--format", "pax", "-cf", out("pax.tar"), *FILES], src)
+        run(["bsdtar", "-czf", out("tar-gzip.tar.gz"), *FILES], src)
+        run(["bsdtar", "-cjf", out("tar-bzip2.tar.bz2"), *FILES], src)
+        run(["bsdtar", "-cJf", out("tar-xz.tar.xz"), *FILES], src)
+        run(["bsdtar", "--lzma", "-cf", out("tar-lzma.tar.lzma"), *FILES], src)
+        run(["bsdtar", "--format", "cpio", "-cf", out("cpio.cpio"), *FILES], src)
+        # An ISO can't be smaller than about 370 KB; gzipped it is about 1 KB, and libarchive reads it the same.
+        iso = src / "iso.iso"
+        run(["bsdtar", "--format", "iso9660", "-cf", str(iso), *FILES], src)
+        with open(out("iso.iso.gz"), "wb") as gz:
+            subprocess.run(["gzip", "-9", "-c", str(iso)], check=True, stdout=gz)
+        with open(out("gzip-single.gz"), "wb") as gz:
+            subprocess.run(["gzip", "-c", "hello.txt"], cwd=src, check=True, stdout=gz)
+
+    print(f"==> done; {len(list(OUT.iterdir()))} files in {OUT.relative_to(ROOT)}")
+
+
+if __name__ == "__main__":
+    main()
