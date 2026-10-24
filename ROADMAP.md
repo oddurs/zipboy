@@ -4,13 +4,9 @@
 
 ## v0.1 — First release
 
-`#########·` 88% · 14 of 16 done · due 2026-11-20
+`##########` 94% · 15 of 16 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
-
-### in progress
-
-- [ ] `0060` Make the repository agent-native <sup>chore · p1 · quality</sup>
 
 ### blocked
 
@@ -32,6 +28,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [x] `0054` A single gzipped file opens as a bogus mtree listing <sup>bug · p2 · archive</sup>
 - [x] `0055` Encrypted 7z and RAR archives ask for a password forever <sup>bug · p1 · archive</sup>
 - [x] `0056` Names in old ZIPs without the UTF-8 flag show as � <sup>bug · p1 · archive</sup>
+- [x] `0060` Make the repository agent-native <sup>chore · p1 · quality</sup>
 
 ## v0.2 — Saves in seconds
 
