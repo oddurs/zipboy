@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # By hand on any branch: builds the DMG and keeps it as an artifact, publishing nothing.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp, such as 0.1.0-test
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: macos-26
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The build number is the commit count, so the history has to be there.
+          fetch-depth: 0
+      - run: scripts/task check
+      - run: scripts/task package "${VERSION#v}"
+      - name: Keep the DMG
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zipboy-${{ inputs.version }}
+          path: build/Zipboy-*.dmg*
+      - name: Publish
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag with a hyphen, such as v0.1.0-rc.1, is a prerelease.
+          case "$VERSION" in *-*) pre="--prerelease" ;; *) pre="" ;; esac
+          gh release create "$VERSION" --verify-tag --title "Zipboy ${VERSION#v}" $pre \
+            --notes-file .github/release-notes.md --generate-notes \
+            "build/Zipboy-${VERSION#v}.dmg" "build/Zipboy-${VERSION#v}.dmg.sha256"
