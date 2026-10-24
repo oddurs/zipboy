@@ -4,17 +4,13 @@
 
 ## v0.1 — First release
 
-`########··` 73% · 11 of 15 done · due 2026-11-20
+`########··` 80% · 12 of 15 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
 
 ### backlog
 
 - [ ] `0016` README: install, what it does, and screenshots <sup>docs · p1 · distribution</sup>
-
-### in progress
-
-- [ ] `0010` Release workflow: a tag produces a DMG on GitHub Releases <sup>feature · p0 · distribution</sup>
 
 ### blocked
 
@@ -26,6 +22,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [x] `0007` Put Zipboy under git with the agent workflow <sup>chore · p0 · quality</sup>
 - [x] `0008` Run scripts/task check in CI on every pull request <sup>chore · p0 · quality</sup>
 - [x] `0009` Can Command Line Tools alone sign, notarize, and staple a release? <sup>spike · p0 · distribution</sup>
+- [x] `0010` Release workflow: a tag produces a DMG on GitHub Releases <sup>feature · p0 · distribution</sup>
 - [x] `0011` Launching a second Zipboy deletes the first one's open archives <sup>bug · p1 · document</sup>
 - [x] `0012` Check free space before unpacking <sup>feature · p1 · document</sup>
 - [x] `0013` Which archive variants does Apple's libarchive actually read? <sup>spike · p0 · archive</sup>
