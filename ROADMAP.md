@@ -33,7 +33,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ## v0.2 — Saves in seconds
 
-`#·········` 10% · 1 of 10 done · due 2026-12-18
+`##········` 18% · 2 of 11 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
@@ -52,6 +52,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 ### done
 
 - [x] `0059` Give Zipboy a look of its own <sup>feature · p1 · shell</sup>
+- [x] `0062` Draw the icon as a running manga Zipboy with speed streaks <sup>feature · p1 · shell</sup>
 
 ## v0.3 — Opens instantly
 
