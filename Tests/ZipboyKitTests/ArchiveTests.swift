@@ -238,6 +238,40 @@ import Testing
         }
     }
 
+    /// A ZIP whose one entry is named by `raw`, with the UTF-8 flag clear, as old Windows tools write.
+    func zip(namedBy raw: [UInt8]) throws -> URL {
+        let placeholder = String(repeating: "X", count: raw.count)
+        let source = try folder("named-\(UUID().uuidString)")
+        try write("x", to: placeholder, in: source)
+        let zip = dir.appendingPathComponent("\(UUID().uuidString).zip")
+        try Archive.writeZip(from: source, to: zip)
+        // An ASCII name is written without the UTF-8 flag; swap in the raw bytes in both headers.
+        var bytes = try Data(contentsOf: zip)
+        var at = bytes.startIndex
+        while let range = bytes.range(of: Data(placeholder.utf8), in: at..<bytes.endIndex) {
+            bytes.replaceSubrange(range, with: raw)
+            at = range.upperBound
+        }
+        try bytes.write(to: zip)
+        return zip
+    }
+
+    @Test func readsCodePage437NamesFromOldZips() throws {
+        // "über.txt" in code page 437, where ü is 0x81.
+        let zip = try zip(namedBy: [0x81] + Array("ber.txt".utf8))
+        let root = try folder("cp437")
+        _ = try Archive.extract(zip, into: root)
+        #expect(try Archive.contents(of: root) == ["über.txt"])
+    }
+
+    @Test func readsUnflaggedUTF8NamesAsUTF8() throws {
+        // macOS's own tools write UTF-8 names without setting the flag.
+        let zip = try zip(namedBy: Array("über.txt".utf8))
+        let root = try folder("utf8")
+        _ = try Archive.extract(zip, into: root)
+        #expect(try Archive.contents(of: root).map { $0.precomposedStringWithCanonicalMapping } == ["über.txt"])
+    }
+
     @Test func reportsGarbage() throws {
         let junk = dir.appendingPathComponent("junk.zip")
         try Data("not an archive".utf8).write(to: junk)
