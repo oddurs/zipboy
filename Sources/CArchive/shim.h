@@ -22,6 +22,10 @@ struct archive_entry;
 const char *archive_error_string(struct archive *);
 int archive_errno(struct archive *);
 const char *archive_format_name(struct archive *);
+
+#define ARCHIVE_FORMAT_BASE_MASK 0xff0000
+#define ARCHIVE_FORMAT_ZIP 0x50000
+int archive_format(struct archive *);
 int64_t archive_filter_bytes(struct archive *, int);
 
 struct archive *archive_read_new(void);

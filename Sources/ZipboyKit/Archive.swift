@@ -9,6 +9,8 @@ public enum ArchiveError: LocalizedError, Equatable {
     case cancelled
     /// The next entry needs `needed` bytes and the volume has `available`.
     case noSpace(needed: Int64, available: Int64)
+    /// The archive is encrypted in a way libarchive can't decrypt, whatever the password.
+    case unsupportedEncryption(format: String)
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +19,8 @@ public enum ArchiveError: LocalizedError, Equatable {
         case .unreadable(let why): "The archive couldn’t be read. \(why)"
         case .unwritable(let why): "The archive couldn’t be written. \(why)"
         case .cancelled: "Cancelled."
+        case .unsupportedEncryption(let format):
+            "It’s an encrypted \(format) archive, and Zipboy can’t decrypt those yet."
         case .noSpace(let needed, let available):
             "There isn’t enough space on the disk. It needs at least \(Self.size(needed)), and \(Self.size(available)) is free."
         }
@@ -88,6 +92,9 @@ public enum Archive {
             if status == ARCHIVE_EOF { break }
             guard status >= ARCHIVE_WARN, let entry else {
                 // A RAR or 7z whose headers are encrypted fails here, before any entry is seen.
+                if isPasswordProblem(a), !canDecrypt(a) {
+                    throw ArchiveError.unsupportedEncryption(format: formatName(a))
+                }
                 if let password, !password.isEmpty, isPasswordProblem(a) { throw ArchiveError.wrongPassword }
                 if isPasswordProblem(a) { throw ArchiveError.passwordRequired }
                 throw ArchiveError.unreadable(message(a))
@@ -96,6 +103,10 @@ public enum Archive {
             try report()
             let encrypted = archive_entry_is_encrypted(entry) != 0
             summary.encrypted = summary.encrypted || encrypted
+            // Asking for a password libarchive can't use would loop: every answer fails.
+            if encrypted, !canDecrypt(a) {
+                throw ArchiveError.unsupportedEncryption(format: formatName(a))
+            }
             if encrypted && password == nil { throw ArchiveError.passwordRequired }
 
             let raw = string(archive_entry_pathname_utf8(entry)) ?? string(archive_entry_pathname(entry)) ?? ""
@@ -298,6 +309,19 @@ public enum Archive {
             if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { return true }
         }
         return false
+    }
+
+    /// Only libarchive's ZIP reader decrypts. Its "encryption" capability flags say only that a reader
+    /// can tell an entry is encrypted, which the 7z and RAR readers can, so they can't decide this.
+    private static func canDecrypt(_ a: OpaquePointer) -> Bool {
+        archive_format(a) & ARCHIVE_FORMAT_BASE_MASK == ARCHIVE_FORMAT_ZIP
+    }
+
+    /// libarchive's name for the format, such as "7-Zip" or "RAR5", without the detail in brackets.
+    private static func formatName(_ a: OpaquePointer) -> String {
+        let name = string(archive_format_name(a)) ?? ""
+        let short = name.split(separator: " (").first.map(String.init) ?? name
+        return short.isEmpty ? "this kind of" : short
     }
 
     private static func isPasswordProblem(_ a: OpaquePointer) -> Bool {
