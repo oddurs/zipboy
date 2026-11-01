@@ -29,6 +29,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     /// Picture previews for the name column, keyed by path and date so an edited file gets a new one.
     private var thumbnails: [String: NSImage] = [:]
     private var requested: Set<String> = []
+    private var settingsObserver: NSObjectProtocol?
 
     private static let nameColumn = NSUserInterfaceItemIdentifier("name")
     private static let modifiedColumn = NSUserInterfaceItemIdentifier("modified")
@@ -77,6 +78,12 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         empty.autoresizingMask = [.width, .height]
         outline.addSubview(empty)
         view = scroll
+
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: Settings.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reload() }
+        }
     }
 
     override func viewDidLayout() {
@@ -114,10 +121,13 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let open = expandedPaths()
         let selected = selection.map(\.path)
 
-        tree.sort(by: sortKey, ascending: ascending)
-        shown = query.isEmpty ? tree : tree.filtered(query)
+        tree.sort(
+            by: sortKey, ascending: ascending, foldersFirst: Settings.shared.keepFoldersOnTop)
+        shown = tree.filtered(query, showHiddenFiles: Settings.shared.showHiddenFiles)
         outline.reloadData()
-        if !shownOnce, let only = tree.children.first, tree.children.count == 1, only.isDirectory {
+        if !shownOnce, Settings.shared.autoExpandSingleFolder,
+            let only = shown?.children.first, shown?.children.count == 1, only.isDirectory
+        {
             // Most archives wrap everything in one folder; opening it saves the first click.
             outline.expandItem(only)
         }
@@ -334,12 +344,32 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         outline.collapseItem(nil, collapseChildren: true)
     }
 
+    @objc func toggleHiddenFiles(_ sender: Any?) {
+        Settings.shared.showHiddenFiles.toggle()
+    }
+
     // MARK: Extracting
 
-    /// One click: next to the archive, then shown in Finder. Only an archive never saved asks where.
+    /// Extracts to the configured default destination, or asks where when needed.
     @objc func extract(_ sender: Any?) {
-        guard let folder = document?.source?.deletingLastPathComponent() else { return extractTo(sender) }
-        extract(into: folder)
+        switch Settings.shared.extractDestination {
+        case .archiveFolder:
+            guard let folder = document?.source?.deletingLastPathComponent() else {
+                return extractTo(sender)
+            }
+            extract(into: folder)
+        case .downloads:
+            guard
+                let downloads = FileManager.default.urls(
+                    for: .downloadsDirectory, in: .userDomainMask
+                ).first
+            else {
+                return extractTo(sender)
+            }
+            extract(into: downloads)
+        case .alwaysAsk:
+            extractTo(sender)
+        }
     }
 
     @objc func extractTo(_ sender: Any?) {
@@ -369,7 +399,13 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let whole = items.isEmpty
         let urls = whole ? (document?.tree?.children.map(\.url) ?? []) : items.map(\.url)
         guard !urls.isEmpty else { return }
-        let wrap = whole && urls.count > 1
+        let wrap: Bool =
+            switch Settings.shared.wrapExtractedFiles {
+            case .whenMultipleItems: whole && urls.count > 1
+            case .always: whole
+            case .never: false
+            }
+        let revealInFinder = Settings.shared.revealExtractedInFinder
         let base = document?.source.map(Naming.stem) ?? "Archive"
         Task.detached {
             do {
@@ -380,8 +416,10 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
                     try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
                 }
                 let copied = try Self.copy(urls, into: destination)
-                let shown = wrap ? [destination] : copied
-                await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting(shown) }
+                if revealInFinder {
+                    let shown = wrap ? [destination] : copied
+                    await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting(shown) }
+                }
             } catch {
                 await MainActor.run { _ = NSApp.presentError(error) }
             }
@@ -416,6 +454,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         case #selector(paste(_:)): return !Self.fileURLs(on: .general).isEmpty
         case #selector(addFiles(_:)), #selector(newFolder(_:)), #selector(selectAll(_:)), #selector(expandAll(_:)),
             #selector(collapseAll(_:)):
+            return true
+        case #selector(toggleHiddenFiles(_:)):
+            (item as? NSMenuItem)?.state = Settings.shared.showHiddenFiles ? .on : .off
             return true
         default: return false
         }

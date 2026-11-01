@@ -67,31 +67,44 @@ public final class Node {
         return node
     }
 
-    /// A copy holding only the nodes whose names contain `query`, with the folders that lead to them.
-    /// Nil when nothing matches.
-    public func filtered(_ query: String) -> Node? {
-        let kept = children.compactMap { $0.filtered(query) }
+    /// A copy holding only the nodes whose names contain `query` (or all nodes when `query` is empty),
+    /// with the folders that lead to them, optionally hiding dot-prefixed items. Nil when nothing matches.
+    public func filtered(_ query: String, showHiddenFiles: Bool = true) -> Node? {
+        if !path.isEmpty, !showHiddenFiles, name.hasPrefix(".") { return nil }
+        if query.isEmpty, showHiddenFiles { return self }
+        let kept = children.compactMap { $0.filtered(query, showHiddenFiles: showHiddenFiles) }
+        if query.isEmpty {
+            let copy = Node(
+                url: url, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size, modified: modified)
+            copy.children = kept
+            copy.children.forEach { $0.parent = copy }
+            return copy
+        }
         let matches = !path.isEmpty && name.localizedStandardContains(query)
         guard matches || !kept.isEmpty || path.isEmpty else { return nil }
         let copy = Node(
             url: url, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size, modified: modified)
         // A matching folder keeps all of its contents, so a search can narrow to a folder and browse it.
-        copy.children = matches ? children.map { $0.copied() } : kept
+        copy.children = matches ? children.compactMap { $0.copied(showHiddenFiles: showHiddenFiles) } : kept
         copy.children.forEach { $0.parent = copy }
         return copy
     }
 
-    private func copied() -> Node {
+    private func copied(showHiddenFiles: Bool = true) -> Node? {
+        if !path.isEmpty, !showHiddenFiles, name.hasPrefix(".") { return nil }
         let copy = Node(
             url: url, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size, modified: modified)
-        copy.children = children.map { $0.copied() }
+        copy.children = children.compactMap { $0.copied(showHiddenFiles: showHiddenFiles) }
         copy.children.forEach { $0.parent = copy }
         return copy
     }
 
-    /// Orders children, folders and files mixed as Finder does, by the given key.
-    public func sort(by key: SortKey, ascending: Bool) {
+    /// Orders children by the given key, optionally keeping folders above files.
+    public func sort(by key: SortKey, ascending: Bool, foldersFirst: Bool = false) {
         children.sort { a, b in
+            if foldersFirst, a.isDirectory != b.isDirectory {
+                return a.isDirectory
+            }
             let order: ComparisonResult
             switch key {
             case .name: order = a.name.localizedStandardCompare(b.name)
@@ -105,7 +118,7 @@ public final class Node {
             if order == .orderedSame { return a.name.localizedStandardCompare(b.name) == .orderedAscending }
             return ascending ? order == .orderedAscending : order == .orderedDescending
         }
-        children.forEach { $0.sort(by: key, ascending: ascending) }
+        children.forEach { $0.sort(by: key, ascending: ascending, foldersFirst: foldersFirst) }
     }
 
     /// The localized kind Finder shows, such as "PNG image".

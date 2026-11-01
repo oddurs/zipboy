@@ -23,7 +23,13 @@ final class ArchiveDocument: NSDocument {
     private(set) var activity: String?
     private var saving: Saving?
     /// The snapshot the background save zips, handed from the main thread to the writing one.
-    private let pendingSave = Locked<(contents: URL, password: String?, cancellation: Cancellation)?>(nil)
+    private let pendingSave = Locked<
+        (
+            contents: URL, password: String?,
+            compressionLevel: Settings.CompressionLevel,
+            cancellation: Cancellation
+        )?
+    >(nil)
 
     private struct Saving {
         let cancellation: Cancellation
@@ -178,7 +184,7 @@ final class ArchiveDocument: NSDocument {
             return completionHandler(error)
         }
         let cancellation = Cancellation()
-        pendingSave.value = (snapshot, password, cancellation)
+        pendingSave.value = (snapshot, password, Settings.shared.compressionLevel, cancellation)
         let autosave = saveOperation == .autosaveInPlaceOperation || saveOperation == .autosaveElsewhereOperation
         saving = Saving(cancellation: cancellation, autosave: autosave)
         // A quick save says nothing. One that takes a while shows how far it has got.
@@ -202,7 +208,10 @@ final class ArchiveDocument: NSDocument {
         unblockUserInteraction()
         var reported = -1
         do {
-            try Archive.writeZip(from: job.contents, to: url, password: job.password) { done in
+            try Archive.writeZip(
+                from: job.contents, to: url, password: job.password,
+                compressionLevel: job.compressionLevel
+            ) { done in
                 let percent = Int(done * 100)
                 if percent != reported {
                     reported = percent

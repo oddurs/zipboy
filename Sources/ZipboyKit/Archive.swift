@@ -255,7 +255,9 @@ public enum Archive {
     /// leaves a half-written archive behind. With a password, every entry is encrypted with AES-256.
     /// `progress` hears the share of bytes written, from 0 to 1, and stops the work by returning false.
     public static func writeZip(
-        from root: URL, to destination: URL, password: String? = nil, progress: ((Double) -> Bool)? = nil
+        from root: URL, to destination: URL, password: String? = nil,
+        compressionLevel: Settings.CompressionLevel = .balanced,
+        progress: ((Double) -> Bool)? = nil
     ) throws {
         useUTF8Names()
         let fm = FileManager.default
@@ -264,7 +266,8 @@ public enum Archive {
         let staging = parent.appendingPathComponent(".Zipboy-\(UUID().uuidString).zip")
         defer { try? fm.removeItem(at: staging) }
 
-        try writeZipFile(from: root, to: staging, password: password, progress: progress)
+        try writeZipFile(
+            from: root, to: staging, password: password, compressionLevel: compressionLevel, progress: progress)
 
         let fd = open(staging.path, O_RDONLY)
         if fd >= 0 {
@@ -278,11 +281,16 @@ public enum Archive {
     }
 
     private static func writeZipFile(
-        from root: URL, to staging: URL, password: String?, progress: ((Double) -> Bool)?
+        from root: URL, to staging: URL, password: String?,
+        compressionLevel: Settings.CompressionLevel,
+        progress: ((Double) -> Bool)?
     ) throws {
         guard let a = archive_write_new() else { throw ArchiveError.unwritable("Out of memory.") }
         defer { archive_write_free(a) }
         archive_write_set_format_zip(a)
+        guard archive_write_set_options(a, "zip:compression-level=\(compressionLevel.rawValue)") == ARCHIVE_OK else {
+            throw ArchiveError.unwritable(message(a))
+        }
         if let password, !password.isEmpty {
             guard archive_write_set_options(a, "zip:encryption=aes256") == ARCHIVE_OK,
                 archive_write_set_passphrase(a, password) == ARCHIVE_OK
@@ -305,6 +313,7 @@ public enum Archive {
             guard progress(total == 0 ? 1 : Double(written) / Double(total)) else { throw ArchiveError.cancelled }
         }
 
+        var usingStore = false
         for (path, attributes) in items {
             let url = root.appendingPathComponent(path)
             guard let entry = archive_entry_new() else { throw ArchiveError.unwritable("Out of memory.") }
@@ -329,8 +338,16 @@ public enum Archive {
                 archive_entry_set_filetype(entry, UInt32(AE_IFREG))
                 archive_entry_set_size(entry, Int64((attributes[.size] as? Int) ?? 0))
                 switch ZipMethod.forFile(named: url.lastPathComponent) {
-                case .store: archive_write_zip_set_compression_store(a)
-                case .deflate: archive_write_zip_set_compression_deflate(a)
+                case .store:
+                    if !usingStore {
+                        archive_write_zip_set_compression_store(a)
+                        usingStore = true
+                    }
+                case .deflate:
+                    if usingStore {
+                        archive_write_zip_set_compression_deflate(a)
+                        usingStore = false
+                    }
                 }
                 try check(archive_write_header(a, entry), a)
                 let input = try FileHandle(forReadingFrom: url)

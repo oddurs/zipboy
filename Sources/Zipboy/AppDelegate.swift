@@ -1,12 +1,20 @@
 import AppKit
+import ZipboyKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Register sensible defaults before any window or document opens.
+        _ = Settings.shared
         // The first controller made becomes the shared one.
         _ = DocumentController()
         // Workspaces outlive the app only when it crashed, so whatever is there now is abandoned.
         Workspace.removeAbandoned()
+    }
+
+    @objc func showSettings(_ sender: Any?) {
+        SettingsWindowController.shared.showWindow(sender)
+        SettingsWindowController.shared.window?.makeKeyAndOrderFront(sender)
     }
 
     /// Archives open as usual. Anything else dropped on the Dock icon, or opened with the app, goes into
@@ -48,6 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// An empty archive to drop files into is the most useful thing to show on a plain launch.
-    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { true }
+    /// Opens an empty archive on launch when the user's launch setting asks for one (the default).
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        Settings.shared.launchBehavior == .openEmptyArchive
+    }
 }
