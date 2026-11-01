@@ -40,3 +40,7 @@ Added Settings in Sources/ZipboyKit/Settings.swift and SettingsWindowController 
 ## Result
 
 Zipboy now includes a native macOS Settings window (⌘,) with sensible defaults for launch behavior, folder-first sorting, single-folder auto-expansion, hidden file visibility (⌘⇧.), extraction destination/folder wrapping, Deflate compression level, default app registration, and one-click Restore Defaults.
+
+## 2026-11-01
+
+Refined right-hand inspector (PreviewViewController) with a framed preview well for icons/folders/archives, compact Quick Look preview for files, file/folder counts, compression ratio savings, and Finder-style contextual quick-action buttons.
