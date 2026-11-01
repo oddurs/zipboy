@@ -101,7 +101,7 @@ final class ArchiveDocument: NSDocument {
                     importedFrom = (url, Self.shortName(summary.format))
                     fileURL = nil
                     fileType = Self.zipType
-                    suggestedName = url.deletingPathExtension().lastPathComponent
+                    suggestedName = Naming.stem(of: url)
                 }
                 return
             } catch let error as ArchiveError where error == .passwordRequired || error == .wrongPassword {
@@ -365,6 +365,7 @@ final class ArchiveDocument: NSDocument {
             try jobs.map { job in
                 let spot = try workspace.holdingSpot(for: job.name)
                 try FileManager.default.copyItem(at: job.source, to: spot)
+                Workspace.makeWritable(spot)
                 return Move(from: spot, to: workspace.url(folder).appendingPathComponent(job.name))
             }
         }.value

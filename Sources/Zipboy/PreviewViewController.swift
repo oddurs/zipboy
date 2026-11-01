@@ -3,14 +3,16 @@ import Quartz
 import UniformTypeIdentifiers
 import ZipboyKit
 
-/// The inspector: a live Quick Look of the selection with its details underneath. With nothing
-/// selected it describes the archive.
+/// The inspector: a live Quick Look of the selection with its Finder-style information table
+/// underneath. With nothing selected it describes the archive.
 @MainActor
 final class PreviewViewController: NSViewController {
     private let quickLook = QLPreviewView(frame: .zero, style: .normal)!
     private let placeholder = NSImageView()
     private let name = NSTextField(wrappingLabelWithString: "")
-    private let grid = NSGridView()
+    private let subtitle = NSTextField(labelWithString: "")
+    private let infoHeader = NSTextField(labelWithString: "Information")
+    private let rowsStack = NSStackView()
     /// The preview sits on a card: a shadow outside, rounded corners clipping inside.
     private let card = NSView()
     private let clip = NSView()
@@ -22,12 +24,12 @@ final class PreviewViewController: NSViewController {
         card.translatesAutoresizingMaskIntoConstraints = false
         card.wantsLayer = true
         card.shadow = NSShadow()
-        card.layer?.shadowOpacity = 0.18
-        card.layer?.shadowRadius = 10
-        card.layer?.shadowOffset = CGSize(width: 0, height: -3)
+        card.layer?.shadowOpacity = 0.12
+        card.layer?.shadowRadius = 8
+        card.layer?.shadowOffset = CGSize(width: 0, height: -2)
         clip.translatesAutoresizingMaskIntoConstraints = false
         clip.wantsLayer = true
-        clip.layer?.cornerRadius = 14
+        clip.layer?.cornerRadius = 10
         clip.layer?.cornerCurve = .continuous
         clip.layer?.masksToBounds = true
         clip.layer?.borderWidth = 0.5
@@ -37,19 +39,36 @@ final class PreviewViewController: NSViewController {
         placeholder.translatesAutoresizingMaskIntoConstraints = false
         placeholder.imageScaling = .scaleProportionallyUpOrDown
 
-        name.font = Theme.rounded(15, .semibold)
-        name.alignment = .center
-        name.maximumNumberOfLines = 3
+        name.font = .systemFont(ofSize: 15, weight: .semibold)
+        name.textColor = .labelColor
+        name.alignment = .left
+        name.maximumNumberOfLines = 2
         name.lineBreakMode = .byTruncatingMiddle
         name.isSelectable = true
 
-        grid.rowSpacing = 7
-        grid.columnSpacing = 12
+        subtitle.font = .systemFont(ofSize: 12)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.alignment = .left
+        subtitle.lineBreakMode = .byTruncatingTail
 
-        let details = NSStackView(views: [name, grid])
+        let titleGroup = NSStackView(views: [name, subtitle])
+        titleGroup.orientation = .vertical
+        titleGroup.alignment = .leading
+        titleGroup.spacing = 2
+
+        infoHeader.font = .systemFont(ofSize: 11, weight: .semibold)
+        infoHeader.textColor = .secondaryLabelColor
+
+        rowsStack.orientation = .vertical
+        rowsStack.alignment = .width
+        rowsStack.spacing = 0
+
+        let details = NSStackView(views: [titleGroup, infoHeader, rowsStack])
         details.orientation = .vertical
-        details.alignment = .centerX
-        details.spacing = 14
+        details.alignment = .width
+        details.spacing = 8
+        details.setCustomSpacing(14, after: titleGroup)
+        details.setCustomSpacing(4, after: infoHeader)
         details.translatesAutoresizingMaskIntoConstraints = false
 
         root.addSubview(card)
@@ -59,7 +78,7 @@ final class PreviewViewController: NSViewController {
             card.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
             card.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             card.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            card.bottomAnchor.constraint(equalTo: details.topAnchor, constant: -20),
+            card.bottomAnchor.constraint(equalTo: details.topAnchor, constant: -18),
             clip.topAnchor.constraint(equalTo: card.topAnchor),
             clip.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             clip.trailingAnchor.constraint(equalTo: card.trailingAnchor),
@@ -70,12 +89,13 @@ final class PreviewViewController: NSViewController {
             quickLook.bottomAnchor.constraint(equalTo: clip.bottomAnchor),
             placeholder.centerXAnchor.constraint(equalTo: card.centerXAnchor),
             placeholder.centerYAnchor.constraint(equalTo: card.centerYAnchor),
-            placeholder.widthAnchor.constraint(equalToConstant: 128),
-            placeholder.heightAnchor.constraint(equalToConstant: 128),
+            placeholder.widthAnchor.constraint(equalToConstant: 112),
+            placeholder.heightAnchor.constraint(equalToConstant: 112),
             details.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             details.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            details.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20),
+            details.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
             name.widthAnchor.constraint(lessThanOrEqualTo: details.widthAnchor),
+            subtitle.widthAnchor.constraint(lessThanOrEqualTo: details.widthAnchor),
         ])
         view = root
     }
@@ -86,6 +106,7 @@ final class PreviewViewController: NSViewController {
         if nodes.count == 1, let node = nodes.first {
             preview(node.url)
             name.stringValue = node.name
+            subtitle.stringValue = "\(node.kind) — \(formatSize(node.size))"
             details([
                 ("Kind", node.kind),
                 ("Size", size(node)),
@@ -100,9 +121,11 @@ final class PreviewViewController: NSViewController {
             }
             name.stringValue = archive.displayName
             let tree = archive.tree
+            let format = archive.importedFrom.map { "\($0.format) Archive" } ?? "ZIP Archive"
+            subtitle.stringValue = "\(format) — \(items(tree?.descendantCount ?? 0))"
             details([
                 ("Format", archive.importedFrom.map { "\($0.format), saves as ZIP" } ?? "ZIP"),
-                archive.password == nil ? nil : ("Password", "Protected with AES-256"),
+                archive.password == nil ? nil : ("Security", "AES-256 Encrypted"),
                 ("Contains", items(tree?.descendantCount ?? 0)),
                 ("Unpacked", formatSize(tree?.size ?? 0)),
                 archive.source.flatMap(Self.fileSize).map { ("On Disk", $0) },
@@ -111,7 +134,8 @@ final class PreviewViewController: NSViewController {
             picture(Self.fan(nodes.prefix(3).map { NSWorkspace.shared.icon(forFile: $0.url.path) }))
             name.stringValue = items(nodes.count)
             let total = nodes.reduce(Int64(0)) { $0 + $1.size }
-            details([("Size", formatSize(total))])
+            subtitle.stringValue = "Multiple items selected"
+            details([("Total Size", formatSize(total))])
         }
     }
 
@@ -134,26 +158,39 @@ final class PreviewViewController: NSViewController {
     }
 
     private func details(_ rows: [(String, String)?]) {
-        // Removing a row leaves its views behind, so they go first.
-        grid.subviews.forEach { $0.removeFromSuperview() }
-        while grid.numberOfRows > 0 { grid.removeRow(at: 0) }
-        for case let (label, value)? in rows {
-            // Small uppercase keys, so the values carry the weight.
-            let key = NSTextField(
-                labelWithAttributedString: NSAttributedString(
-                    string: label.uppercased(),
-                    attributes: [.font: NSFont.systemFont(ofSize: 10, weight: .semibold), .kern: 0.6]))
-            key.textColor = .tertiaryLabelColor
-            key.alignment = .right
+        rowsStack.arrangedSubviews.forEach { view in
+            rowsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        let entries = rows.compactMap { $0 }
+        for (index, (label, value)) in entries.enumerated() {
+            if index > 0 {
+                let divider = NSBox()
+                divider.boxType = .separator
+                divider.translatesAutoresizingMaskIntoConstraints = false
+                rowsStack.addArrangedSubview(divider)
+            }
+            let key = NSTextField(labelWithString: label)
+            key.font = .systemFont(ofSize: 12)
+            key.textColor = .secondaryLabelColor
+            key.setContentHuggingPriority(.required, for: .horizontal)
+            key.setContentCompressionResistancePriority(.required, for: .horizontal)
+
             let field = NSTextField(labelWithString: value)
-            field.font = .systemFont(ofSize: 12)
+            field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            field.textColor = .labelColor
+            field.alignment = .right
             field.isSelectable = true
             field.lineBreakMode = .byTruncatingMiddle
-            grid.addRow(with: [key, field])
-        }
-        if grid.numberOfColumns > 0 {
-            grid.column(at: 0).xPlacement = .trailing
-            grid.rowAlignment = .firstBaseline
+            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+            let row = NSStackView(views: [key, field])
+            row.orientation = .horizontal
+            row.alignment = .firstBaseline
+            row.distribution = .fill
+            row.spacing = 12
+            row.edgeInsets = NSEdgeInsets(top: 5, left: 0, bottom: 5, right: 0)
+            rowsStack.addArrangedSubview(row)
         }
     }
 
@@ -179,7 +216,7 @@ final class PreviewViewController: NSViewController {
     private func size(_ node: Node) -> String {
         let text = formatSize(node.size)
         guard !node.isDirectory, node.size >= 1000 else { return text }
-        return "\(text) (\(node.size.formatted()) bytes)"
+        return "\(text) (\(node.size.formatted()) B)"
     }
 
     private func items(_ count: Int) -> String {

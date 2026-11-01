@@ -45,18 +45,14 @@ import Testing
         #expect(view.accessibilityLabel()?.contains("No matches") == true)
     }
 
-    @Test func selectedRowsKeepTheirTextReadable() {
+    @Test func rowsFollowSystemSelectionStyle() {
         let row = ArchiveRowView()
-        let cell = NSTableCellView()
-        cell.identifier = NSUserInterfaceItemIdentifier("size")
-        let field = NSTextField(labelWithString: "9 KB")
-        cell.textField = field
-        cell.addSubview(field)
-        row.addSubview(cell)
+        #expect(Theme.accent == .controlAccentColor)
         #expect(row.interiorBackgroundStyle == .normal)
         row.isSelected = true
-        #expect(field.textColor == .labelColor)
+        row.isEmphasized = true
+        #expect(row.interiorBackgroundStyle == .emphasized)
         row.isSelected = false
-        #expect(field.textColor == .secondaryLabelColor)
+        #expect(row.interiorBackgroundStyle == .normal)
     }
 }

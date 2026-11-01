@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import ZipboyKit
 
@@ -58,13 +59,35 @@ import ZipboyKit
         #expect(Naming.unique("v1.2", isDirectory: true, taken: ["v1.2"]) == "v1.2 2")
         #expect(Naming.unique("Makefile", isDirectory: false, taken: ["Makefile"]) == "Makefile 2")
     }
+
+    @Test func stripsCompoundArchiveExtensions() {
+        #expect(Naming.stem(of: URL(fileURLWithPath: "/tmp/project.tar.gz")) == "project")
+        #expect(Naming.stem(of: URL(fileURLWithPath: "/tmp/backup.tar.xz")) == "backup")
+        #expect(Naming.stem(of: URL(fileURLWithPath: "/tmp/data.tar.zst")) == "data")
+        #expect(Naming.stem(of: URL(fileURLWithPath: "/tmp/initrd.cpio.gz")) == "initrd")
+        #expect(Naming.stem(of: URL(fileURLWithPath: "/tmp/disc.iso.gz")) == "disc")
+        #expect(Naming.stem(of: URL(fileURLWithPath: "/tmp/plain.rar")) == "plain")
+    }
 }
 
 @Suite struct ZipMethodTests {
     @Test func storesWhatIsAlreadyCompressed() {
         #expect(ZipMethod.forFile(named: "IMG_0001.JPG") == .store)
         #expect(ZipMethod.forFile(named: "inner.zip") == .store)
+        #expect(ZipMethod.forFile(named: "bundle.tbz2") == .store)
+        #expect(ZipMethod.forFile(named: "release.txz") == .store)
+        #expect(ZipMethod.forFile(named: "package.deb") == .store)
+        #expect(ZipMethod.forFile(named: "archive.cpgz") == .store)
         #expect(ZipMethod.forFile(named: "notes.txt") == .deflate)
         #expect(ZipMethod.forFile(named: "README") == .deflate)
+    }
+
+    @Test func recognizesBroadArchiveExtensions() {
+        for ext in [
+            "zip", "zipx", "rar", "7z", "tar", "tgz", "tbz2", "txz", "tlz", "tzst", "taz", "cpgz", "xar", "cab", "lha",
+            "deb",
+        ] {
+            #expect(ZipMethod.archiveExtensions.contains(ext), "\(ext)")
+        }
     }
 }

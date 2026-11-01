@@ -137,6 +137,14 @@ def main() -> None:
             ["7zz", "a", "-tzip", "-mm=Deflate64", out("zip-deflate64.zip"), "big.txt"],
             src,
         )
+        run(
+            ["7zz", "a", "-tzip", "-mm=XZ", out("zip-xz.zip"), *FILES],
+            src,
+        )
+        run(
+            ["7zz", "a", "-tzip", "-mm=PPMd", out("zip-ppmd.zip"), *FILES],
+            src,
+        )
 
         out("zip-bzip2.zip")
         python_zip("zip-bzip2.zip", src, zipfile.ZIP_BZIP2)
@@ -178,7 +186,12 @@ def main() -> None:
         run(["bsdtar", "-cjf", out("tar-bzip2.tar.bz2"), *FILES], src)
         run(["bsdtar", "-cJf", out("tar-xz.tar.xz"), *FILES], src)
         run(["bsdtar", "--lzma", "-cf", out("tar-lzma.tar.lzma"), *FILES], src)
+        run(["bsdtar", "-cZf", out("tar-compress.tar.Z"), *FILES], src)
+        run(["bsdtar", "--uuencode", "-cf", out("tar-uu.tar.uu"), *FILES], src)
         run(["bsdtar", "--format", "cpio", "-cf", out("cpio.cpio"), *FILES], src)
+        run(["bsdtar", "--format", "cpio", "-czf", out("cpio-gz.cpgz"), *FILES], src)
+        run(["bsdtar", "--format", "xar", "-cf", out("xar.xar"), *FILES], src)
+        run(["bsdtar", "--format", "ar", "-cf", out("ar.ar"), "hello.txt"], src)
         # An ISO can't be smaller than about 370 KB; gzipped it is about 1 KB, and libarchive reads it the same.
         iso = src / "iso.iso"
         run(["bsdtar", "--format", "iso9660", "-cf", str(iso), *FILES], src)

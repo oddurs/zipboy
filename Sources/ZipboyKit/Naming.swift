@@ -20,4 +20,19 @@ public enum Naming {
             number += 1
         }
     }
+
+    private static let innerContainers: Set<String> = ["tar", "cpio", "iso"]
+
+    /// The base name of an archive without its extension, stripping compound extensions such as
+    /// `.tar.gz`, `.tar.xz`, `.tar.zst`, `.cpio.gz`, or `.iso.gz` so `project.tar.gz` becomes `project`.
+    public static func stem(of url: URL) -> String {
+        let once = url.deletingPathExtension()
+        let inner = once.pathExtension.lowercased()
+        if innerContainers.contains(inner) {
+            let twice = once.deletingPathExtension().lastPathComponent
+            if !twice.isEmpty { return twice }
+        }
+        let name = once.lastPathComponent
+        return name.isEmpty ? "Archive" : name
+    }
 }

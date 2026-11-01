@@ -46,12 +46,10 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         addColumn(Self.sizeColumn, "Size", width: 80, min: 60, key: .size, ascending: false)
         addColumn(Self.kindColumn, "Kind", width: 140, min: 60, key: .kind)
         outline.outlineTableColumn = outline.tableColumns.first
-        outline.style = .fullWidth
-        // No stripes: they draw rows that aren't there behind an empty archive. Taller rows, and no gap
-        // between them, so neighbouring selections join into one capsule.
+        outline.style = .inset
         outline.usesAlternatingRowBackgroundColors = false
-        outline.rowHeight = 26
-        outline.intercellSpacing = NSSize(width: 3, height: 0)
+        outline.rowHeight = 24
+        outline.intercellSpacing = NSSize(width: 8, height: 0)
         outline.allowsMultipleSelection = true
         outline.autoresizesOutlineColumn = false
         // The last column takes up the slack, so rows end where the list does.
@@ -108,6 +106,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         if let done = document?.loading {
             empty.mode = .loading(done)
             empty.isHidden = false
+            outline.usesAlternatingRowBackgroundColors = false
             showHeader(false)
             return
         }
@@ -130,8 +129,10 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         }
         select(selected)
 
-        empty.isHidden = shown?.children.isEmpty == false
+        let hasRows = shown?.children.isEmpty == false
+        empty.isHidden = hasRows
         empty.mode = query.isEmpty ? .drop : .noResults
+        outline.usesAlternatingRowBackgroundColors = hasRows
         // Column headers over nothing are noise; they come back with the first item.
         showHeader(tree.children.isEmpty == false)
         selectionChanged()
@@ -369,7 +370,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let urls = whole ? (document?.tree?.children.map(\.url) ?? []) : items.map(\.url)
         guard !urls.isEmpty else { return }
         let wrap = whole && urls.count > 1
-        let base = document?.source?.deletingPathExtension().lastPathComponent ?? "Archive"
+        let base = document?.source.map(Naming.stem) ?? "Archive"
         Task.detached {
             do {
                 var destination = folder
@@ -569,6 +570,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             image.translatesAutoresizingMaskIntoConstraints = false
             cell.addSubview(image)
             cell.imageView = image
+            field.font = .systemFont(ofSize: 13)
             field.isEditable = true
             field.target = self
             field.action = #selector(nameEdited(_:))
@@ -580,11 +582,12 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
                 field.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6),
             ])
         } else {
+            field.font = .systemFont(ofSize: 12)
             field.textColor = .secondaryLabelColor
             field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2).isActive = true
             if id == Self.sizeColumn {
                 field.alignment = .right
-                field.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+                field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
             }
         }
         return cell
@@ -787,7 +790,7 @@ final class BrowserOutlineView: NSOutlineView {
     /// Hears when a drag leaves or finishes, so highlights can go.
     var onDragDone: (() -> Void)?
 
-    /// An orange edge round the visible list while a drop would land in the archive's top level.
+    /// A system-accent edge round the visible list while a drop would land in the archive's top level.
     var rootDropGlow = false {
         didSet { if rootDropGlow != oldValue { needsDisplay = true } }
     }
