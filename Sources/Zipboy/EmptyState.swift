@@ -36,36 +36,37 @@ final class EmptyStateView: NSView {
         tray.wantsLayer = true
         tray.layer?.addSublayer(border)
         border.fillColor = nil
-        border.lineWidth = 2
-        border.lineDashPattern = [10, 7]
+        border.lineWidth = 1.5
+        border.lineDashPattern = [8, 6]
         border.lineCap = .round
         tray.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tray)
 
-        glyph.symbolConfiguration = .init(pointSize: 40, weight: .light)
-        title.font = Theme.rounded(18, .semibold)
+        glyph.symbolConfiguration = .init(pointSize: 38, weight: .regular)
+        title.font = .systemFont(ofSize: 16, weight: .semibold)
         title.alignment = .center
-        detail.font = .systemFont(ofSize: 13)
+        detail.font = .systemFont(ofSize: 12)
         detail.textColor = .secondaryLabelColor
         detail.alignment = .center
-        choose.isBordered = false
-        choose.font = Theme.rounded(13, .semibold)
+        choose.bezelStyle = .rounded
+        choose.controlSize = .regular
+        choose.font = .systemFont(ofSize: 13, weight: .medium)
         choose.setAccessibilityLabel("Choose files to add")
 
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 6
-        stack.setCustomSpacing(14, after: glyph)
-        stack.setCustomSpacing(18, after: zipper)
-        stack.setCustomSpacing(12, after: detail)
+        stack.setCustomSpacing(12, after: glyph)
+        stack.setCustomSpacing(16, after: zipper)
+        stack.setCustomSpacing(14, after: detail)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
         NSLayoutConstraint.activate([
             tray.centerXAnchor.constraint(equalTo: centerXAnchor),
-            tray.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -16),
-            tray.widthAnchor.constraint(equalToConstant: 340),
-            tray.heightAnchor.constraint(equalToConstant: 230),
+            tray.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -12),
+            tray.widthAnchor.constraint(equalToConstant: 330),
+            tray.heightAnchor.constraint(equalToConstant: 220),
             stack.centerXAnchor.constraint(equalTo: tray.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: tray.centerYAnchor),
             stack.widthAnchor.constraint(lessThanOrEqualTo: tray.widthAnchor, constant: -40),
@@ -89,7 +90,7 @@ final class EmptyStateView: NSView {
         super.layout()
         border.frame = tray.bounds
         border.path = CGPath(
-            roundedRect: tray.bounds.insetBy(dx: 1, dy: 1), cornerWidth: 26, cornerHeight: 26, transform: nil)
+            roundedRect: tray.bounds.insetBy(dx: 1, dy: 1), cornerWidth: 16, cornerHeight: 16, transform: nil)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -113,11 +114,11 @@ final class EmptyStateView: NSView {
         case .drop:
             glyph.image = NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: nil)
             title.stringValue = "Drop files here"
-            detail.stringValue = "Files and folders are zipped up as you go."
+            detail.stringValue = "Files and folders are zipped automatically as you go."
         case .noResults:
             glyph.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
             title.stringValue = "No matches"
-            detail.stringValue = "Nothing in this archive has that in its name."
+            detail.stringValue = "Nothing in this archive matches that search."
         case .loading(let done):
             zipper.progress = done
             title.stringValue = "Unzipping…"
@@ -128,22 +129,21 @@ final class EmptyStateView: NSView {
     }
 
     private func updateHighlight() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            let lit = highlighted && mode == .drop
-            border.strokeColor = (lit ? Theme.accent : NSColor.tertiaryLabelColor).cgColor
-            border.fillColor = lit ? Theme.dropFill.cgColor : nil
-        }
-        glyph.contentTintColor = mode == .drop ? Theme.accent : .tertiaryLabelColor
-        title.textColor = mode == .drop ? .labelColor : .secondaryLabelColor
-        choose.contentTintColor = Theme.accent
-
         let lit = highlighted && mode == .drop
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            border.strokeColor = (lit ? Theme.accent : NSColor.tertiaryLabelColor).cgColor
+            border.fillColor =
+                lit ? Theme.dropFill.cgColor : NSColor.quaternaryLabelColor.withAlphaComponent(0.18).cgColor
+        }
+        glyph.contentTintColor = lit ? Theme.accent : (mode == .drop ? .secondaryLabelColor : .tertiaryLabelColor)
+        title.textColor = mode == .drop ? .labelColor : .secondaryLabelColor
+
         border.removeAllAnimations()
         guard lit, !Theme.reduceMotion() else { return }
         // The dashes march round the tray, and the glyph hops, while a drop is waiting.
         let march = CABasicAnimation(keyPath: "lineDashPhase")
         march.fromValue = 0
-        march.toValue = -34
+        march.toValue = -28
         march.duration = 0.6
         march.repeatCount = .infinity
         border.add(march, forKey: "march")

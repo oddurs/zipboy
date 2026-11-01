@@ -49,3 +49,7 @@ Added Deflate64 decoder in Sources/ZipboyKit/Deflate64.swift; expanded Info.plis
 ## Result
 
 Zipboy now opens Deflate64, XZ/PPMd ZIPs, .tar.Z, .tar.uu, .cpgz, XAR, ar, CAB, LHA, and related archive extensions, while preserving hardlinks, enforcing mid-stream space limits, cleaning up partial extractions, and writing ZIPs atomically.
+
+## 2026-11-01
+
+Reverted yellow/orange UI theme to native macOS system accent colors and standard selection, refined outline view to inset Finder style with alternating row stripes and crisp typography, and redesigned inspector with a Finder-style Information table while keeping the manga running Zipboy app icon.
