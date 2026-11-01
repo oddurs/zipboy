@@ -3,30 +3,45 @@ import Quartz
 import UniformTypeIdentifiers
 import ZipboyKit
 
-/// The inspector: a live Quick Look of the selection with its Finder-style information table
-/// underneath. With nothing selected it describes the archive.
+/// The right-hand inspector: a live Quick Look preview (or crisp icon stage for folders, multi-selection,
+/// and the archive overview), followed by Finder-style identity headers, an Information table with
+/// hairline dividers, and contextual quick-action buttons.
 @MainActor
 final class PreviewViewController: NSViewController {
-    private let quickLook = QLPreviewView(frame: .zero, style: .normal)!
+    private let stage = NSView()
+    private let well = NSView()
+    private let quickLook = QLPreviewView(frame: .zero, style: .compact)!
+    private let card = NSView()
+    private let clip = NSView()
     private let placeholder = NSImageView()
+
     private let name = NSTextField(wrappingLabelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
     private let infoHeader = NSTextField(labelWithString: "Information")
     private let rowsStack = NSStackView()
-    /// The preview sits on a card: a shadow outside, rounded corners clipping inside.
-    private let card = NSView()
-    private let clip = NSView()
+    private let actionsStack = NSStackView()
 
     override func loadView() {
         let root = NSView()
+
+        stage.translatesAutoresizingMaskIntoConstraints = false
+
+        well.translatesAutoresizingMaskIntoConstraints = false
+        well.wantsLayer = true
+        well.layer?.cornerRadius = 10
+        well.layer?.cornerCurve = .continuous
+        well.layer?.borderWidth = 0.5
+
         quickLook.translatesAutoresizingMaskIntoConstraints = false
         quickLook.shouldCloseWithWindow = true
+
         card.translatesAutoresizingMaskIntoConstraints = false
         card.wantsLayer = true
         card.shadow = NSShadow()
-        card.layer?.shadowOpacity = 0.12
-        card.layer?.shadowRadius = 8
+        card.layer?.shadowOpacity = 0.10
+        card.layer?.shadowRadius = 6
         card.layer?.shadowOffset = CGSize(width: 0, height: -2)
+
         clip.translatesAutoresizingMaskIntoConstraints = false
         clip.wantsLayer = true
         clip.layer?.cornerRadius = 10
@@ -38,6 +53,10 @@ final class PreviewViewController: NSViewController {
 
         placeholder.translatesAutoresizingMaskIntoConstraints = false
         placeholder.imageScaling = .scaleProportionallyUpOrDown
+
+        stage.addSubview(well)
+        stage.addSubview(card)
+        stage.addSubview(placeholder)
 
         name.font = .systemFont(ofSize: 15, weight: .semibold)
         name.textColor = .labelColor
@@ -56,6 +75,8 @@ final class PreviewViewController: NSViewController {
         titleGroup.alignment = .leading
         titleGroup.spacing = 2
 
+        let topRule = Self.hairline()
+
         infoHeader.font = .systemFont(ofSize: 11, weight: .semibold)
         infoHeader.textColor = .secondaryLabelColor
 
@@ -63,34 +84,66 @@ final class PreviewViewController: NSViewController {
         rowsStack.alignment = .width
         rowsStack.spacing = 0
 
-        let details = NSStackView(views: [titleGroup, infoHeader, rowsStack])
+        let bottomRule = Self.hairline()
+
+        actionsStack.orientation = .horizontal
+        actionsStack.alignment = .centerY
+        actionsStack.distribution = .fillEqually
+        actionsStack.spacing = 8
+
+        let details = NSStackView(views: [
+            titleGroup,
+            topRule,
+            infoHeader,
+            rowsStack,
+            bottomRule,
+            actionsStack,
+        ])
         details.orientation = .vertical
         details.alignment = .width
         details.spacing = 8
-        details.setCustomSpacing(14, after: titleGroup)
+        details.setCustomSpacing(10, after: titleGroup)
+        details.setCustomSpacing(10, after: topRule)
         details.setCustomSpacing(4, after: infoHeader)
+        details.setCustomSpacing(10, after: rowsStack)
+        details.setCustomSpacing(10, after: bottomRule)
         details.translatesAutoresizingMaskIntoConstraints = false
 
-        root.addSubview(card)
-        root.addSubview(placeholder)
+        root.addSubview(stage)
         root.addSubview(details)
+
         NSLayoutConstraint.activate([
-            card.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 16),
-            card.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            card.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            card.bottomAnchor.constraint(equalTo: details.topAnchor, constant: -18),
+            stage.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 14),
+            stage.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            stage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            stage.bottomAnchor.constraint(equalTo: details.topAnchor, constant: -14),
+            stage.heightAnchor.constraint(greaterThanOrEqualToConstant: 140),
+
+            well.topAnchor.constraint(equalTo: stage.topAnchor),
+            well.leadingAnchor.constraint(equalTo: stage.leadingAnchor),
+            well.trailingAnchor.constraint(equalTo: stage.trailingAnchor),
+            well.bottomAnchor.constraint(equalTo: stage.bottomAnchor),
+
+            card.topAnchor.constraint(equalTo: stage.topAnchor),
+            card.leadingAnchor.constraint(equalTo: stage.leadingAnchor),
+            card.trailingAnchor.constraint(equalTo: stage.trailingAnchor),
+            card.bottomAnchor.constraint(equalTo: stage.bottomAnchor),
+
             clip.topAnchor.constraint(equalTo: card.topAnchor),
             clip.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             clip.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             clip.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+
             quickLook.topAnchor.constraint(equalTo: clip.topAnchor),
             quickLook.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
             quickLook.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
             quickLook.bottomAnchor.constraint(equalTo: clip.bottomAnchor),
-            placeholder.centerXAnchor.constraint(equalTo: card.centerXAnchor),
-            placeholder.centerYAnchor.constraint(equalTo: card.centerYAnchor),
-            placeholder.widthAnchor.constraint(equalToConstant: 112),
-            placeholder.heightAnchor.constraint(equalToConstant: 112),
+
+            placeholder.centerXAnchor.constraint(equalTo: stage.centerXAnchor),
+            placeholder.centerYAnchor.constraint(equalTo: stage.centerYAnchor),
+            placeholder.widthAnchor.constraint(equalToConstant: 96),
+            placeholder.heightAnchor.constraint(equalToConstant: 96),
+
             details.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             details.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             details.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
@@ -100,49 +153,123 @@ final class PreviewViewController: NSViewController {
         view = root
     }
 
-    /// Shows one item in Quick Look, or sums up several, or describes the archive when none is selected.
+    /// Shows one item in Quick Look, sums up several, or describes the archive when none is selected.
     func show(_ nodes: [Node], archive: ArchiveDocument) {
         loadViewIfNeeded()
         if nodes.count == 1, let node = nodes.first {
-            preview(node.url)
+            if Self.shouldUseQuickLook(for: node) {
+                preview(node.url)
+            } else {
+                let icon = NSWorkspace.shared.icon(forFile: node.url.path)
+                icon.size = NSSize(width: 96, height: 96)
+                picture(icon)
+            }
             name.stringValue = node.name
             subtitle.stringValue = "\(node.kind) — \(formatSize(node.size))"
+            let parentFolder = (node.path as NSString).deletingLastPathComponent
+            let linkTarget =
+                node.isSymlink
+                ? (try? FileManager.default.destinationOfSymbolicLink(atPath: node.url.path))
+                : nil
             details([
                 ("Kind", node.kind),
                 ("Size", size(node)),
-                ("Modified", node.modified.map(Self.date) ?? "—"),
                 node.isDirectory ? ("Contains", items(node.descendantCount)) : nil,
+                ("Location", parentFolder.isEmpty ? "Top Level" : parentFolder),
+                linkTarget.map { ("Points To", $0) },
+                ("Modified", node.modified.map(Self.date) ?? "—"),
+            ])
+            configureActions([
+                node.isDirectory
+                    ? ("Open", "folder", #selector(BrowserViewController.openItems(_:)), true)
+                    : ("Quick Look", "eye", #selector(BrowserViewController.toggleQuickLook(_:)), true),
+                ("Extract", "arrow.down.to.line", #selector(BrowserViewController.extract(_:)), true),
+                ("Rename", "pencil", #selector(BrowserViewController.rename(_:)), true),
+                ("Delete", "trash", #selector(BrowserViewController.delete(_:)), true),
             ])
         } else if nodes.isEmpty {
-            if let url = archive.source {
-                preview(url)
-            } else {
-                picture(NSWorkspace.shared.icon(for: .zip))
-            }
+            let icon =
+                archive.source.map { NSWorkspace.shared.icon(forFile: $0.path) }
+                ?? NSWorkspace.shared.icon(for: .zip)
+            icon.size = NSSize(width: 96, height: 96)
+            picture(icon)
+
             name.stringValue = archive.displayName
             let tree = archive.tree
+            let totalItems = tree?.descendantCount ?? 0
+            let unpackedBytes = tree?.size ?? 0
             let format = archive.importedFrom.map { "\($0.format) Archive" } ?? "ZIP Archive"
-            subtitle.stringValue = "\(format) — \(items(tree?.descendantCount ?? 0))"
+            subtitle.stringValue =
+                totalItems == 0
+                ? "Empty \(format)"
+                : "\(format) — \(items(totalItems))"
+
+            let diskBytes = archive.source.flatMap(Self.fileBytes)
+            let diskDescription: String? = diskBytes.map { bytes in
+                let formatted = formatSize(bytes)
+                if unpackedBytes > 0, bytes < unpackedBytes {
+                    let saved = Int(round((1.0 - Double(bytes) / Double(unpackedBytes)) * 100))
+                    if saved > 0 { return "\(formatted) (\(saved)% smaller)" }
+                }
+                return formatted
+            }
+            let archiveModified = archive.source.flatMap {
+                (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            }
+
             details([
-                ("Format", archive.importedFrom.map { "\($0.format), saves as ZIP" } ?? "ZIP"),
-                archive.password == nil ? nil : ("Security", "AES-256 Encrypted"),
-                ("Contains", items(tree?.descendantCount ?? 0)),
-                ("Unpacked", formatSize(tree?.size ?? 0)),
-                archive.source.flatMap(Self.fileSize).map { ("On Disk", $0) },
+                ("Format", archive.importedFrom.map { "\($0.format) (saves as ZIP)" } ?? "ZIP"),
+                ("Security", archive.password == nil ? "None" : "AES-256 Encrypted"),
+                ("Contains", Self.breakdown(of: tree)),
+                ("Unpacked", formatSize(unpackedBytes)),
+                diskDescription.map { ("On Disk", $0) },
+                archiveModified.map { ("Modified", Self.date($0)) },
+            ])
+            let hasItems = totalItems > 0
+            configureActions([
+                ("Add Files", "plus", #selector(BrowserViewController.addFiles(_:)), true),
+                ("New Folder", "folder.badge.plus", #selector(BrowserViewController.newFolder(_:)), true),
+                (
+                    archive.password == nil ? "Lock" : "Password",
+                    archive.password == nil ? "lock" : "lock.fill",
+                    #selector(ArchiveDocument.choosePassword(_:)),
+                    true
+                ),
+                ("Extract All", "arrow.down.to.line", #selector(BrowserViewController.extract(_:)), hasItems),
             ])
         } else {
             picture(Self.fan(nodes.prefix(3).map { NSWorkspace.shared.icon(forFile: $0.url.path) }))
-            name.stringValue = items(nodes.count)
+            name.stringValue = "\(nodes.count.formatted()) Items Selected"
             let total = nodes.reduce(Int64(0)) { $0 + $1.size }
-            subtitle.stringValue = "Multiple items selected"
-            details([("Total Size", formatSize(total))])
+            let folderCount = nodes.filter(\.isDirectory).count
+            let fileCount = nodes.count - folderCount
+            subtitle.stringValue = "\(Self.countsText(files: fileCount, folders: folderCount)) — \(formatSize(total))"
+            details([
+                ("Selection", Self.countsText(files: fileCount, folders: folderCount)),
+                ("Total Size", formatSize(total)),
+            ])
+            configureActions([
+                ("Quick Look", "eye", #selector(BrowserViewController.toggleQuickLook(_:)), true),
+                ("Open", "arrow.up.forward.app", #selector(BrowserViewController.openItems(_:)), true),
+                ("Extract", "arrow.down.to.line", #selector(BrowserViewController.extract(_:)), true),
+                ("Delete", "trash", #selector(BrowserViewController.delete(_:)), true),
+            ])
         }
+    }
+
+    /// Folders, symlinks, and nested archives show a clean icon in the stage rather than Quick Look's
+    /// generic info card, which would duplicate the inspector's own metadata below.
+    private static func shouldUseQuickLook(for node: Node) -> Bool {
+        guard !node.isDirectory, !node.isSymlink else { return false }
+        let ext = node.url.pathExtension.lowercased()
+        if ZipMethod.archiveExtensions.contains(ext) { return false }
+        return true
     }
 
     private func preview(_ url: URL) {
         placeholder.isHidden = true
+        well.isHidden = true
         card.isHidden = false
-        // Same file again means it changed underneath, as when another app saved over it.
         if (quickLook.previewItem as? NSURL) as URL? == url {
             quickLook.refreshPreviewItem()
         } else {
@@ -153,6 +280,7 @@ final class PreviewViewController: NSViewController {
     private func picture(_ image: NSImage?) {
         quickLook.previewItem = nil
         card.isHidden = true
+        well.isHidden = false
         placeholder.image = image
         placeholder.isHidden = false
     }
@@ -165,10 +293,7 @@ final class PreviewViewController: NSViewController {
         let entries = rows.compactMap { $0 }
         for (index, (label, value)) in entries.enumerated() {
             if index > 0 {
-                let divider = NSBox()
-                divider.boxType = .separator
-                divider.translatesAutoresizingMaskIntoConstraints = false
-                rowsStack.addArrangedSubview(divider)
+                rowsStack.addArrangedSubview(Self.hairline())
             }
             let key = NSTextField(labelWithString: label)
             key.font = .systemFont(ofSize: 12)
@@ -194,9 +319,59 @@ final class PreviewViewController: NSViewController {
         }
     }
 
+    private func configureActions(_ specs: [(title: String, symbol: String, action: Selector, enabled: Bool)]) {
+        actionsStack.arrangedSubviews.forEach { view in
+            actionsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for spec in specs {
+            let button = NSButton(frame: .zero)
+            button.bezelStyle = .rounded
+            button.isBordered = false
+            button.imagePosition = .imageAbove
+            button.title = spec.title
+            button.font = .systemFont(ofSize: 10, weight: .medium)
+            if let image = NSImage(systemSymbolName: spec.symbol, accessibilityDescription: spec.title) {
+                button.image = image.withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+            }
+            button.contentTintColor = spec.enabled ? .secondaryLabelColor : .quaternaryLabelColor
+            button.action = spec.action
+            button.target = nil
+            button.isEnabled = spec.enabled
+            button.setAccessibilityLabel(spec.title)
+            actionsStack.addArrangedSubview(button)
+        }
+    }
+
+    private static func breakdown(of tree: Node?) -> String {
+        guard let tree else { return "0 items" }
+        var files = 0
+        var folders = 0
+        func walk(_ node: Node) {
+            for child in node.children {
+                if child.isDirectory {
+                    folders += 1
+                    walk(child)
+                } else {
+                    files += 1
+                }
+            }
+        }
+        walk(tree)
+        if files == 0 && folders == 0 { return "0 items" }
+        return countsText(files: files, folders: folders)
+    }
+
+    private static func countsText(files: Int, folders: Int) -> String {
+        var parts: [String] = []
+        if files > 0 { parts.append(files == 1 ? "1 file" : "\(files.formatted()) files") }
+        if folders > 0 { parts.append(folders == 1 ? "1 folder" : "\(folders.formatted()) folders") }
+        return parts.isEmpty ? "0 items" : parts.joined(separator: ", ")
+    }
+
     /// Up to three icons fanned out like cards in a hand, for a selection of several items.
     private static func fan(_ icons: [NSImage]) -> NSImage {
-        let side: CGFloat = 128
+        let side: CGFloat = 112
         return NSImage(size: NSSize(width: side, height: side), flipped: false) { bounds in
             let angles: [CGFloat] = icons.count == 1 ? [0] : icons.count == 2 ? [8, -8] : [12, 0, -12]
             for (icon, angle) in zip(icons, angles) {
@@ -206,7 +381,7 @@ final class PreviewViewController: NSViewController {
                 turn.rotate(byDegrees: angle)
                 turn.translateX(by: -bounds.midX, yBy: -(bounds.minY + 12))
                 turn.concat()
-                icon.draw(in: bounds.insetBy(dx: 18, dy: 18))
+                icon.draw(in: bounds.insetBy(dx: 16, dy: 16))
                 NSGraphicsContext.restoreGraphicsState()
             }
             return true
@@ -223,9 +398,16 @@ final class PreviewViewController: NSViewController {
         count == 1 ? "1 item" : "\(count.formatted()) items"
     }
 
-    private static func fileSize(_ url: URL) -> String? {
+    private static func fileBytes(_ url: URL) -> Int64? {
         guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else { return nil }
-        return formatSize(Int64(size))
+        return Int64(size)
+    }
+
+    private static func hairline() -> NSBox {
+        let box = NSBox()
+        box.boxType = .separator
+        box.translatesAutoresizingMaskIntoConstraints = false
+        return box
     }
 
     static func date(_ date: Date) -> String {
@@ -244,8 +426,9 @@ func formatSize(_ bytes: Int64) -> String {
 extension PreviewViewController {
     override func viewDidLayout() {
         super.viewDidLayout()
-        // A CGColor doesn't follow the appearance by itself.
         view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            well.layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.14).cgColor
+            well.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
             clip.layer?.borderColor = NSColor.separatorColor.cgColor
             card.layer?.shadowColor = NSColor.shadowColor.cgColor
         }

@@ -40,6 +40,8 @@ enum MainMenu {
         let menu = NSMenu(title: "Zipboy")
         menu.addItem(item("About Zipboy", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
         menu.addItem(.separator())
+        menu.addItem(item("Settings…", #selector(AppDelegate.showSettings(_:)), ",", symbol: "gearshape"))
+        menu.addItem(.separator())
         let services = item("Services", nil)
         services.submenu = NSMenu(title: "Services")
         NSApp.servicesMenu = services.submenu
@@ -113,6 +115,10 @@ enum MainMenu {
             item("Expand All", #selector(BrowserViewController.expandAll(_:)), "\u{F703}", [.command, .option]))
         menu.addItem(
             item("Collapse All", #selector(BrowserViewController.collapseAll(_:)), "\u{F702}", [.command, .option]))
+        menu.addItem(
+            item(
+                "Show Hidden Files", #selector(BrowserViewController.toggleHiddenFiles(_:)), ".",
+                [.command, .shift]))
         menu.addItem(.separator())
         menu.addItem(item("Show Toolbar", #selector(NSWindow.toggleToolbarShown(_:)), "t", [.command, .option]))
         menu.addItem(item("Customize Toolbar…", #selector(NSWindow.runToolbarCustomizationPalette(_:))))

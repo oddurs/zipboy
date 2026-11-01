@@ -91,3 +91,66 @@ import ZipboyKit
         }
     }
 }
+
+@Suite struct SettingsTests {
+    func isolatedSettings() -> (Settings, String) {
+        let suiteName = "com.oddurs.zipboy.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        return (Settings(defaults: defaults), suiteName)
+    }
+
+    @Test func registersSensibleDefaultsAndRestoresThem() {
+        let (settings, suiteName) = isolatedSettings()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        #expect(settings.launchBehavior == .openEmptyArchive)
+        #expect(settings.keepFoldersOnTop == true)
+        #expect(settings.autoExpandSingleFolder == true)
+        #expect(settings.showHiddenFiles == false)
+        #expect(settings.extractDestination == .archiveFolder)
+        #expect(settings.wrapExtractedFiles == .whenMultipleItems)
+        #expect(settings.revealExtractedInFinder == true)
+        #expect(settings.compressionLevel == .balanced)
+
+        final class Counter: @unchecked Sendable {
+            var count = 0
+        }
+        let notifications = Counter()
+        let token = NotificationCenter.default.addObserver(
+            forName: Settings.didChangeNotification, object: settings, queue: nil
+        ) { _ in
+            notifications.count += 1
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        settings.launchBehavior = .doNothing
+        settings.keepFoldersOnTop = false
+        settings.autoExpandSingleFolder = false
+        settings.showHiddenFiles = true
+        settings.extractDestination = .downloads
+        settings.wrapExtractedFiles = .always
+        settings.revealExtractedInFinder = false
+        settings.compressionLevel = .best
+
+        #expect(settings.launchBehavior == .doNothing)
+        #expect(settings.keepFoldersOnTop == false)
+        #expect(settings.autoExpandSingleFolder == false)
+        #expect(settings.showHiddenFiles == true)
+        #expect(settings.extractDestination == .downloads)
+        #expect(settings.wrapExtractedFiles == .always)
+        #expect(settings.revealExtractedInFinder == false)
+        #expect(settings.compressionLevel == .best)
+        #expect(notifications.count == 8)
+
+        settings.resetToDefaults()
+        #expect(settings.launchBehavior == .openEmptyArchive)
+        #expect(settings.keepFoldersOnTop == true)
+        #expect(settings.autoExpandSingleFolder == true)
+        #expect(settings.showHiddenFiles == false)
+        #expect(settings.extractDestination == .archiveFolder)
+        #expect(settings.wrapExtractedFiles == .whenMultipleItems)
+        #expect(settings.revealExtractedInFinder == true)
+        #expect(settings.compressionLevel == .balanced)
+        #expect(notifications.count == 9)
+    }
+}

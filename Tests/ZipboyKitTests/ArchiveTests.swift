@@ -339,6 +339,34 @@ import Testing
         }
         #expect(leftovers.isEmpty)
     }
+
+    @Test func writeZipHonorsCompressionLevel() throws {
+        let source = try folder("levels")
+        // Pseudo-random text with repeated phrases so higher Deflate effort finds longer matches.
+        var text = ""
+        for i in 0..<4000 {
+            text += "Zipboy archive entry line \(i % 97) with compressible content block \((i * 31) % 113).\n"
+        }
+        try write(text, to: "log.txt", in: source)
+
+        let fastZip = dir.appendingPathComponent("fast.zip")
+        let balancedZip = dir.appendingPathComponent("balanced.zip")
+        let bestZip = dir.appendingPathComponent("best.zip")
+
+        try Archive.writeZip(from: source, to: fastZip, compressionLevel: .fast)
+        try Archive.writeZip(from: source, to: balancedZip, compressionLevel: .balanced)
+        try Archive.writeZip(from: source, to: bestZip, compressionLevel: .best)
+
+        let fastSize = try Data(contentsOf: fastZip).count
+        let bestSize = try Data(contentsOf: bestZip).count
+        #expect(bestSize <= fastSize)
+
+        for zip in [fastZip, balancedZip, bestZip] {
+            let out = try folder("verify-\(zip.lastPathComponent)")
+            _ = try Archive.extract(zip, into: out)
+            #expect(try read("log.txt", in: out) == text)
+        }
+    }
 }
 
 @Suite struct NodeTests {
@@ -349,18 +377,26 @@ import Testing
         try Data(count: 10).write(to: root.appendingPathComponent("docs/report.pdf"))
         try Data(count: 5).write(to: root.appendingPathComponent("docs/old/report 2.pdf"))
         try Data(count: 3).write(to: root.appendingPathComponent("b.txt"))
+        try Data(count: 2).write(to: root.appendingPathComponent(".gitignore"))
         try Data(count: 1).write(to: root.appendingPathComponent(".DS_Store"))
 
         let tree = Node.scan(root)
-        tree.sort(by: .name, ascending: true)
-        #expect(tree.children.map(\.name) == ["b.txt", "docs"])
-        #expect(tree.size == 18)
+        tree.sort(by: .name, ascending: true, foldersFirst: false)
+        #expect(tree.children.map(\.name) == [".gitignore", "b.txt", "docs"])
+        tree.sort(by: .name, ascending: true, foldersFirst: true)
+        #expect(tree.children.map(\.name) == ["docs", ".gitignore", "b.txt"])
+        #expect(tree.size == 20)
         #expect(tree.find("docs")?.size == 15)
         #expect(tree.find("docs/old/report 2.pdf")?.parent?.name == "old")
-        #expect(tree.descendantCount == 5)
+        #expect(tree.descendantCount == 6)
+
+        let visibleWithoutDotfiles = try #require(tree.filtered("", showHiddenFiles: false))
+        #expect(visibleWithoutDotfiles.children.map(\.name) == ["docs", "b.txt"])
+        let visibleWithDotfiles = try #require(tree.filtered("", showHiddenFiles: true))
+        #expect(visibleWithDotfiles.children.map(\.name) == ["docs", ".gitignore", "b.txt"])
 
         tree.sort(by: .size, ascending: false)
-        #expect(tree.children.map(\.name) == ["docs", "b.txt"])
+        #expect(tree.children.map(\.name) == ["docs", "b.txt", ".gitignore"])
 
         let found = try #require(tree.filtered("report"))
         #expect(found.children.map(\.name) == ["docs"])
