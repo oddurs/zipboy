@@ -63,6 +63,26 @@ struct Workspace: Sendable {
     func url(_ path: String) -> URL {
         path.isEmpty ? contents : contents.appendingPathComponent(path)
     }
+
+    /// Ensures items copied in from a read-only source (such as a mounted disk image or ISO) have
+    /// owner write permission so they can be renamed, edited, moved, or deleted in the workspace.
+    static func makeWritable(_ root: URL) {
+        let fm = FileManager.default
+        func apply(_ target: URL) {
+            guard let values = try? target.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+                values.isSymbolicLink != true
+            else { return }
+            let current = (try? fm.attributesOfItem(atPath: target.path)[.posixPermissions] as? Int) ?? 0o644
+            let mode = values.isDirectory == true ? (current | 0o700) : (current | 0o600)
+            try? fm.setAttributes([.posixPermissions: mode], ofItemAtPath: target.path)
+            if values.isDirectory == true {
+                for child in (try? fm.contentsOfDirectory(at: target, includingPropertiesForKeys: nil)) ?? [] {
+                    apply(child)
+                }
+            }
+        }
+        apply(root)
+    }
 }
 
 /// One rename inside a workspace.

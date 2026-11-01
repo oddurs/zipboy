@@ -39,7 +39,8 @@ public struct ExtractSummary: Equatable, Sendable {
     public var skipped: [String]
 }
 
-/// Reads every format libarchive knows and writes ZIP, the one format worth writing back.
+/// Reads every format libarchive knows (plus Deflate64 ZIPs) and writes ZIP, the one format worth
+/// writing back.
 public enum Archive {
     private static let chunk = 1 << 20
 
@@ -52,9 +53,9 @@ public enum Archive {
 
     /// Unpacks `archive` into the empty directory `root`. Entries that would land outside `root`, through
     /// `..`, an absolute path, or a symlink, are skipped rather than trusted. `progress` hears the share of
-    /// the file read so far, from 0 to 1, and stops the work by returning false. Each file is checked
-    /// against `capacity`, the free bytes on `root`'s volume, before it is written, so a full disk stops
-    /// the work cleanly instead of partway through a file.
+    /// the file read so far, from 0 to 1, and stops the work by returning false. Each file and chunk is
+    /// checked against `capacity`, the free bytes on `root`'s volume, before it is written, so a full disk
+    /// or decompression bomb stops the work cleanly instead of partway through a file.
     public static func extract(
         _ archive: URL, into root: URL, password: String? = nil, progress: ((Double) -> Bool)? = nil,
         capacity: (() -> Int64?)? = nil
@@ -79,10 +80,19 @@ public enum Archive {
         }
 
         // Asking the volume is slow-ish, so ask once and count down, and ask again only when a file
-        // might not fit.
+        // or chunk might not fit.
         var budget = capacity()
+        func reserve(_ bytes: Int64, needed: Int64) throws {
+            if let known = budget, bytes > known {
+                let fresh = capacity() ?? known
+                budget = fresh
+                if bytes > fresh { throw ArchiveError.noSpace(needed: max(bytes, needed), available: fresh) }
+            }
+        }
+
         var summary = ExtractSummary(format: "", encrypted: false, skipped: [])
         var folders: [(URL, Date)] = []
+        var deflate64Seen: [String: Int] = [:]
         let fm = FileManager.default
         var buffer = [UInt8](repeating: 0, count: chunk)
         var entry: OpaquePointer?
@@ -123,6 +133,36 @@ public enum Archive {
 
             do {
                 try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+                // Hardlinks in tar, cpio, 7z, and RAR carry no data stream of their own; they point to an
+                // earlier entry in the archive. Copy that entry if it stays safely inside the root.
+                if let rawTarget = string(archive_entry_hardlink_utf8(entry)) ?? string(archive_entry_hardlink(entry)),
+                    !rawTarget.isEmpty
+                {
+                    guard let targetPath = EntryPath.sanitized(rawTarget), !hasLinkAbove(targetPath, in: root) else {
+                        summary.skipped.append(raw)
+                        archive_read_data_skip(a)
+                        continue
+                    }
+                    let targetURL = root.appendingPathComponent(targetPath)
+                    guard fm.fileExists(atPath: targetURL.path), !isDirectory(targetURL),
+                        (try? targetURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink != true
+                    else {
+                        summary.skipped.append(raw)
+                        archive_read_data_skip(a)
+                        continue
+                    }
+                    let targetSize = Int64((try? fm.attributesOfItem(atPath: targetURL.path)[.size] as? Int) ?? 0)
+                    try reserve(targetSize, needed: targetSize)
+                    try? fm.removeItem(at: url)
+                    try fm.copyItem(at: targetURL, to: url)
+                    budget = budget.map { $0 - targetSize }
+                    var attributes: [FileAttributeKey: Any] = [.posixPermissions: (perm != 0 ? perm : 0o644) | 0o600]
+                    if let modified { attributes[.modificationDate] = modified }
+                    try fm.setAttributes(attributes, ofItemAtPath: url.path)
+                    continue
+                }
+
                 switch Int32(archive_entry_filetype(entry)) {
                 case AE_IFDIR:
                     if !isDirectory(url) {
@@ -142,34 +182,52 @@ public enum Archive {
                     try fm.createSymbolicLink(atPath: url.path, withDestinationPath: target)
                 case AE_IFREG:
                     let size = archive_entry_size(entry)
-                    if let known = budget, size > known {
-                        let fresh = capacity() ?? known
-                        budget = fresh
-                        if size > fresh { throw ArchiveError.noSpace(needed: size, available: fresh) }
-                    }
+                    if size > 0 { try reserve(size, needed: size) }
                     try? fm.removeItem(at: url)
                     guard fm.createFile(atPath: url.path, contents: nil) else {
                         throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
                     }
-                    let out = try FileHandle(forWritingTo: url)
-                    defer { try? out.close() }
-                    while true {
-                        let n = archive_read_data(a, &buffer, buffer.count)
-                        if n == 0 { break }
-                        guard n > 0 else {
-                            if encrypted { throw ArchiveError.wrongPassword }
-                            throw ArchiveError.unreadable(message(a))
+                    do {
+                        let out = try FileHandle(forWritingTo: url)
+                        defer { try? out.close() }
+                        var written: Int64 = 0
+                        while true {
+                            // libarchive's XAR reader leaves the cumulative heap offset in its EOF block,
+                            // which makes archive_read_data append bogus NUL padding if read past `size`.
+                            let limit =
+                                isXar(a) && size >= 0
+                                ? Int(min(Int64(buffer.count), max(0, size - written))) : buffer.count
+                            if limit == 0 { break }
+                            let n = archive_read_data(a, &buffer, limit)
+                            if n == 0 { break }
+                            if n < 0 {
+                                if !encrypted, isZip(a), written == 0, isDeflate64Problem(a) {
+                                    let occ = deflate64Seen[raw, default: 0]
+                                    deflate64Seen[raw] = occ + 1
+                                    try Deflate64.extract(
+                                        named: raw, occurrence: occ, from: archive, to: out,
+                                        budget: &budget, capacity: capacity, report: report)
+                                    break
+                                }
+                                if encrypted { throw ArchiveError.wrongPassword }
+                                throw ArchiveError.unreadable(message(a))
+                            }
+                            let chunkBytes = Int64(n)
+                            try reserve(chunkBytes, needed: max(size, written + chunkBytes))
+                            do {
+                                try out.write(contentsOf: buffer[0..<n])
+                            } catch let error as CocoaError where error.code == .fileWriteOutOfSpace {
+                                // A size the archive didn't declare, or space taken meanwhile by something else.
+                                throw ArchiveError.noSpace(
+                                    needed: max(size, written + chunkBytes), available: capacity() ?? 0)
+                            }
+                            written += chunkBytes
+                            budget = budget.map { $0 - chunkBytes }
+                            try report()
                         }
-                        do {
-                            try out.write(contentsOf: buffer[0..<n])
-                        } catch let error as CocoaError where error.code == .fileWriteOutOfSpace {
-                            // A size the archive didn't declare, or space taken meanwhile by something else.
-                            try? out.close()
-                            try? fm.removeItem(at: url)
-                            throw ArchiveError.noSpace(needed: size, available: capacity() ?? 0)
-                        }
-                        budget = budget.map { $0 - Int64(n) }
-                        try report()
+                    } catch {
+                        try? fm.removeItem(at: url)
+                        throw error
                     }
                     var attributes: [FileAttributeKey: Any] = [.posixPermissions: perm | 0o600]
                     if let modified { attributes[.modificationDate] = modified }
@@ -192,13 +250,36 @@ public enum Archive {
         return summary
     }
 
-    /// Zips the contents of `root` into a new file at `destination`, leaving out Finder metadata. With a
-    /// password, every entry is encrypted with AES-256. `progress` hears the share of bytes written, from
-    /// 0 to 1, and stops the work by returning false.
+    /// Zips the contents of `root` into `destination`, leaving out Finder metadata. Writes to a sibling
+    /// staging file, flushes it to disk, and renames it into place so a failure or cancellation never
+    /// leaves a half-written archive behind. With a password, every entry is encrypted with AES-256.
+    /// `progress` hears the share of bytes written, from 0 to 1, and stops the work by returning false.
     public static func writeZip(
         from root: URL, to destination: URL, password: String? = nil, progress: ((Double) -> Bool)? = nil
     ) throws {
         useUTF8Names()
+        let fm = FileManager.default
+        let parent = destination.deletingLastPathComponent()
+        try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let staging = parent.appendingPathComponent(".Zipboy-\(UUID().uuidString).zip")
+        defer { try? fm.removeItem(at: staging) }
+
+        try writeZipFile(from: root, to: staging, password: password, progress: progress)
+
+        let fd = open(staging.path, O_RDONLY)
+        if fd >= 0 {
+            _ = fsync(fd)
+            close(fd)
+        }
+        guard rename(staging.path, destination.path) == 0 else {
+            let reason = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO).localizedDescription
+            throw ArchiveError.unwritable(reason)
+        }
+    }
+
+    private static func writeZipFile(
+        from root: URL, to staging: URL, password: String?, progress: ((Double) -> Bool)?
+    ) throws {
         guard let a = archive_write_new() else { throw ArchiveError.unwritable("Out of memory.") }
         defer { archive_write_free(a) }
         archive_write_set_format_zip(a)
@@ -207,7 +288,7 @@ public enum Archive {
                 archive_write_set_passphrase(a, password) == ARCHIVE_OK
             else { throw ArchiveError.unwritable(message(a)) }
         }
-        guard archive_write_open_filename(a, destination.path) == ARCHIVE_OK else {
+        guard archive_write_open_filename(a, staging.path) == ARCHIVE_OK else {
             throw ArchiveError.unwritable(message(a))
         }
 
@@ -321,6 +402,15 @@ public enum Archive {
         archive_format(a) & ARCHIVE_FORMAT_BASE_MASK == ARCHIVE_FORMAT_ZIP
     }
 
+    private static func isXar(_ a: OpaquePointer) -> Bool {
+        archive_format(a) & ARCHIVE_FORMAT_BASE_MASK == ARCHIVE_FORMAT_XAR
+    }
+
+    private static func isDeflate64Problem(_ a: OpaquePointer) -> Bool {
+        let text = message(a).lowercased()
+        return text.contains("deflation-64-bit") || text.contains("compression method (9")
+    }
+
     /// libarchive's name for the format, such as "7-Zip" or "RAR5", without the detail in brackets.
     private static func formatName(_ a: OpaquePointer) -> String {
         let name = string(archive_format_name(a)) ?? ""
@@ -330,14 +420,19 @@ public enum Archive {
 
     /// An entry's name as text. ZIPs written without the UTF-8 flag hold either UTF-8, as macOS's own
     /// tools write, or code page 437, as the ZIP specification says and older Windows tools write; bytes
-    /// that aren't valid UTF-8 are read as CP437 rather than shown as "�".
+    /// that aren't valid UTF-8 are read as CP437 rather than shown as "".
     private static func name(of entry: OpaquePointer, in a: OpaquePointer) -> String {
         if isZip(a), let stored = archive_entry_pathname(entry) {
             let bytes = Data(bytes: stored, count: strlen(stored))
-            if let text = String(data: bytes, encoding: .utf8) { return text }
-            if let text = String(data: bytes, encoding: codePage437) { return text }
+            return decodeZipName(bytes)
         }
         return string(archive_entry_pathname_utf8(entry)) ?? string(archive_entry_pathname(entry)) ?? ""
+    }
+
+    static func decodeZipName(_ bytes: Data) -> String {
+        if let text = String(data: bytes, encoding: .utf8) { return text }
+        if let text = String(data: bytes, encoding: codePage437) { return text }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static let codePage437 = String.Encoding(
@@ -357,9 +452,18 @@ public enum Archive {
     }
 
     /// libarchive converts names through the C locale, which starts out as ASCII-only "C" and would turn
-    /// every non-ASCII name into an error.
+    /// every non-ASCII name into an error. Also adds Homebrew's tool paths so libarchive's external
+    /// decompression filters (such as zstd and lz4) work when the app is launched from Finder.
     private static func useUTF8Names() {
         _ = utf8Locale
     }
-    private static let utf8Locale: Void = { _ = setlocale(LC_CTYPE, "UTF-8") }()
+    private static let utf8Locale: Void = {
+        _ = setlocale(LC_CTYPE, "UTF-8")
+        let current = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        var parts = current.split(separator: ":").map(String.init)
+        for extra in ["/opt/homebrew/bin", "/usr/local/bin"] where !parts.contains(extra) {
+            parts.append(extra)
+        }
+        setenv("PATH", parts.joined(separator: ":"), 1)
+    }()
 }

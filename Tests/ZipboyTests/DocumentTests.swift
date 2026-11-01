@@ -92,6 +92,42 @@ import ZipboyKit
         undo.redo()
         #expect(document.tree?.find("Docs/a.txt") != nil)
     }
+
+    @Test func addingReadOnlyItemsMakesThemEditableInWorkspace() async throws {
+        let source = dir.appendingPathComponent("readonly-source")
+        let lockedFolder = source.appendingPathComponent("LockedDir")
+        try FileManager.default.createDirectory(at: lockedFolder, withIntermediateDirectories: true)
+        let lockedFile = lockedFolder.appendingPathComponent("readonly.txt")
+        try Data("locked".utf8).write(to: lockedFile)
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: lockedFile.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: lockedFolder.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: lockedFolder.path)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: lockedFile.path)
+        }
+
+        let document = ArchiveDocument()
+        document.makeWindowControllers()
+        defer { document.close() }
+
+        try await document.add([lockedFolder], into: "") { _ in .keepBoth }
+        #expect(document.tree?.find("LockedDir/readonly.txt") != nil)
+        try document.rename("LockedDir/readonly.txt", to: "writable.txt")
+        #expect(document.tree?.find("LockedDir/writable.txt") != nil)
+        try document.remove(["LockedDir"])
+        #expect(document.tree?.children.isEmpty == true)
+    }
+
+    @Test func mapsArchiveExtensionsToSafeDocumentTypes() throws {
+        let controller = DocumentController()
+        #expect(try controller.typeForContents(of: URL(fileURLWithPath: "/tmp/a.zip")) == ArchiveDocument.zipType)
+        for ext in [
+            "rar", "7z", "tar", "tgz", "tbz2", "txz", "tlz", "tzst", "taz", "cpgz", "xar", "cab", "lha", "deb", "zipx",
+        ] {
+            let type = try controller.typeForContents(of: URL(fileURLWithPath: "/tmp/sample.\(ext)"))
+            #expect(type == "public.archive", "\(ext)")
+        }
+    }
 }
 
 /// The save path: snapshots, autosaves cancelled by edits, and encryption.

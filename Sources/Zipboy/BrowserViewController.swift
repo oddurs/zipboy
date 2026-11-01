@@ -369,7 +369,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let urls = whole ? (document?.tree?.children.map(\.url) ?? []) : items.map(\.url)
         guard !urls.isEmpty else { return }
         let wrap = whole && urls.count > 1
-        let base = document?.source?.deletingPathExtension().lastPathComponent ?? "Archive"
+        let base = document?.source.map(Naming.stem) ?? "Archive"
         Task.detached {
             do {
                 var destination = folder

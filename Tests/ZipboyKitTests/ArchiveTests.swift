@@ -277,6 +277,68 @@ import Testing
         try Data("not an archive".utf8).write(to: junk)
         #expect(throws: ArchiveError.self) { try Archive.extract(junk, into: try folder("x")) }
     }
+
+    @Test func preservesHardlinksAndSkipsUnsafeOnes() throws {
+        let source = try folder("hardlinks")
+        try write("shared payload", to: "a.txt", in: source)
+        try FileManager.default.linkItem(
+            at: source.appendingPathComponent("a.txt"),
+            to: source.appendingPathComponent("b.txt"))
+        let tar = dir.appendingPathComponent("hardlinks.tar")
+        let (status, out) = try run("/usr/bin/bsdtar", ["-cf", tar.path, "-C", source.path, "a.txt", "b.txt"])
+        #expect(status == 0, "\(out)")
+
+        let root = try folder("hardlinks-out")
+        let summary = try Archive.extract(tar, into: root)
+        #expect(summary.skipped.isEmpty)
+        #expect(try read("a.txt", in: root) == "shared payload")
+        #expect(try read("b.txt", in: root) == "shared payload")
+    }
+
+    @Test func stopsWhenAnEntryExceedsCapacityMidStream() throws {
+        let source = try folder("stream-source")
+        let fullSize = UInt32(3 << 20)
+        try Data(repeating: 0x41, count: Int(fullSize)).write(to: source.appendingPathComponent("streamed.bin"))
+        let zip = dir.appendingPathComponent("streamed.zip")
+        try Archive.writeZip(from: source, to: zip)
+
+        // Patch the declared uncompressed size (3 MB -> 64 bytes) in the ZIP headers so the up-front
+        // size check passes and only the mid-stream chunk check can stop it from filling the disk.
+        var bytes = try Data(contentsOf: zip)
+        let target = withUnsafeBytes(of: fullSize.littleEndian) { Data($0) }
+        let spoofed = withUnsafeBytes(of: UInt32(64).littleEndian) { Data($0) }
+        var at = bytes.startIndex
+        while let range = bytes.range(of: target, in: at..<bytes.endIndex) {
+            bytes.replaceSubrange(range, with: spoofed)
+            at = range.upperBound
+        }
+        try bytes.write(to: zip)
+
+        let root = try folder("stream-out")
+        #expect(throws: ArchiveError.self) {
+            try Archive.extract(zip, into: root, capacity: { 1 << 20 })
+        }
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("streamed.bin").path))
+    }
+
+    @Test func cancelledWriteLeavesExistingArchiveIntact() throws {
+        let initial = try folder("initial")
+        try write("keep me", to: "kept.txt", in: initial)
+        let zip = dir.appendingPathComponent("durable.zip")
+        try Archive.writeZip(from: initial, to: zip)
+        let originalBytes = try Data(contentsOf: zip)
+
+        let replacement = try folder("replacement")
+        try Data(repeating: 0x5A, count: 2 << 20).write(to: replacement.appendingPathComponent("big.bin"))
+        #expect(throws: ArchiveError.cancelled) {
+            try Archive.writeZip(from: replacement, to: zip) { _ in false }
+        }
+        #expect(try Data(contentsOf: zip) == originalBytes)
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter {
+            $0.hasPrefix(".Zipboy-")
+        }
+        #expect(leftovers.isEmpty)
+    }
 }
 
 @Suite struct NodeTests {

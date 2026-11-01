@@ -25,6 +25,7 @@ const char *archive_format_name(struct archive *);
 
 #define ARCHIVE_FORMAT_BASE_MASK 0xff0000
 #define ARCHIVE_FORMAT_ZIP 0x50000
+#define ARCHIVE_FORMAT_XAR 0xa0000
 int archive_format(struct archive *);
 int64_t archive_filter_bytes(struct archive *, int);
 
@@ -66,11 +67,14 @@ struct archive_entry *archive_entry_new(void);
 void archive_entry_free(struct archive_entry *);
 const char *archive_entry_pathname(struct archive_entry *);
 const char *archive_entry_pathname_utf8(struct archive_entry *);
+const char *archive_entry_hardlink(struct archive_entry *);
+const char *archive_entry_hardlink_utf8(struct archive_entry *);
 const char *archive_entry_symlink(struct archive_entry *);
 const char *archive_entry_symlink_utf8(struct archive_entry *);
 mode_t archive_entry_filetype(struct archive_entry *);
 mode_t archive_entry_perm(struct archive_entry *);
 int64_t archive_entry_size(struct archive_entry *);
+int archive_entry_size_is_set(struct archive_entry *);
 time_t archive_entry_mtime(struct archive_entry *);
 int archive_entry_mtime_is_set(struct archive_entry *);
 int archive_entry_is_encrypted(struct archive_entry *);

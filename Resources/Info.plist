@@ -54,15 +54,33 @@
 			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
 			<array>
+				<string>public.archive</string>
 				<string>com.rarlab.rar-archive</string>
 				<string>org.7-zip.7-zip-archive</string>
 				<string>public.tar-archive</string>
 				<string>org.gnu.gnu-zip-tar-archive</string>
+				<string>public.tar-bzip2-archive</string>
+				<string>org.tukaani.tar-xz-archive</string>
 				<string>org.gnu.gnu-zip-archive</string>
 				<string>public.bzip2-archive</string>
 				<string>org.tukaani.xz-archive</string>
+				<string>org.tukaani.lzma-archive</string>
+				<string>com.facebook.zstd-archive</string>
+				<string>org.lz4.lz4-archive</string>
+				<string>org.lzop.lzo-archive</string>
+				<string>public.z-archive</string>
 				<string>public.cpio-archive</string>
+				<string>com.apple.bom-compressed-cpio</string>
 				<string>public.iso-image</string>
+				<string>com.microsoft.cab</string>
+				<string>public.lha-archive</string>
+				<string>public.ar-archive</string>
+				<string>com.apple.xar-archive</string>
+				<string>com.apple.installer-package-archive</string>
+				<string>com.sun.java-archive</string>
+				<string>com.sun.web-application-archive</string>
+				<string>com.apple.itunes.ipa</string>
+				<string>com.winzip.zipx-archive</string>
 			</array>
 			<key>NSDocumentClass</key>
 			<string>ArchiveDocument</string>
@@ -85,7 +103,8 @@
 	</array>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
-		<!-- macOS knows no type for RAR, so without this a .rar is plain data and can't be opened here. -->
+		<!-- macOS lacks built-in UTTypes for several common archive extensions; without these,
+		     Finder and Open panels treat them as generic data. -->
 		<dict>
 			<key>UTTypeIdentifier</key>
 			<string>com.rarlab.rar-archive</string>
@@ -101,11 +120,176 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>rar</string>
+					<string>cbr</string>
 				</array>
 				<key>public.mime-type</key>
 				<array>
 					<string>application/vnd.rar</string>
 					<string>application/x-rar-compressed</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.tukaani.lzma-archive</string>
+			<key>UTTypeDescription</key>
+			<string>LZMA Archive</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lzma</string>
+					<string>tlz</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-lzma</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.facebook.zstd-archive</string>
+			<key>UTTypeDescription</key>
+			<string>Zstandard Archive</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>zst</string>
+					<string>tzst</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/zstd</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.lz4.lz4-archive</string>
+			<key>UTTypeDescription</key>
+			<string>LZ4 Archive</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lz4</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-lz4</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.lzop.lzo-archive</string>
+			<key>UTTypeDescription</key>
+			<string>LZOP Archive</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lzo</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-lzop</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>public.lha-archive</string>
+			<key>UTTypeDescription</key>
+			<string>LHA Archive</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lha</string>
+					<string>lzh</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-lzh-compressed</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>public.ar-archive</string>
+			<key>UTTypeDescription</key>
+			<string>Unix Archiver Package</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ar</string>
+					<string>deb</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-archive</string>
+					<string>application/vnd.debian.binary-package</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.winzip.zipx-archive</string>
+			<key>UTTypeDescription</key>
+			<string>Extended ZIP Package</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>zipx</string>
+					<string>cbz</string>
+					<string>cb7</string>
+					<string>cbt</string>
+					<string>taz</string>
+					<string>apk</string>
+					<string>whl</string>
+					<string>xpi</string>
+					<string>nupkg</string>
+					<string>ear</string>
 				</array>
 			</dict>
 		</dict>

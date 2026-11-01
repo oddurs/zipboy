@@ -29,7 +29,9 @@ import Testing
         "zip-zipcrypto.zip": .opens(standard, password: "secret"),
         "zip-aes128.zip": .opens(standard, password: "secret"),
         "zip-aes256.zip": .opens(standard, password: "secret"),
-        "zip-deflate64.zip": .fails("deflation-64-bit"),
+        "zip-deflate64.zip": .opens(["big.txt"]),
+        "zip-xz.zip": .opens(standard),
+        "zip-ppmd.zip": .opens(standard),
         "7z-lzma2.7z": .opens(standard),
         "7z-lzma.7z": .opens(standard),
         "7z-ppmd.7z": .opens(standard),
@@ -44,7 +46,12 @@ import Testing
         "tar-bzip2.tar.bz2": .opens(standard),
         "tar-xz.tar.xz": .opens(standard),
         "tar-lzma.tar.lzma": .opens(standard),
+        "tar-compress.tar.Z": .opens(standard),
+        "tar-uu.tar.uu": .opens(standard),
         "cpio.cpio": .opens(standard),
+        "cpio-gz.cpgz": .opens(standard),
+        "xar.xar": .opens(standard),
+        "ar.ar": .opens(["hello.txt"]),
         "iso.iso.gz": .opens(standard),
         "gzip-single.gz": .fails("Unrecognized archive format"),
         "rar4-normal.rar": .opens([
@@ -103,6 +110,17 @@ import Testing
             if paths.contains("dir/world.txt") {
                 #expect(
                     try String(contentsOf: root.appendingPathComponent("dir/world.txt"), encoding: .utf8) == "world\n")
+            }
+            if paths.contains("big.txt") {
+                #expect(
+                    try String(contentsOf: root.appendingPathComponent("big.txt"), encoding: .utf8)
+                        == String(repeating: "zipboy ", count: 20_000))
+            }
+            if name == "rar5-unicode.rar" {
+                let original = try Data(contentsOf: root.appendingPathComponent("👋🌎.txt"))
+                let hardlink = try Data(contentsOf: root.appendingPathComponent("Ⓗⓐⓡⓓ Ⓛⓘⓝⓚ.txt"))
+                #expect(!original.isEmpty)
+                #expect(hardlink == original)
             }
             if name == "zip-symlink.zip" {
                 #expect(
