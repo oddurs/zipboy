@@ -53,3 +53,7 @@ Zipboy now opens Deflate64, XZ/PPMd ZIPs, .tar.Z, .tar.uu, .cpgz, XAR, ar, CAB, 
 ## 2026-11-01
 
 Reverted yellow/orange UI theme to native macOS system accent colors and standard selection, refined outline view to inset Finder style with alternating row stripes and crisp typography, and redesigned inspector with a Finder-style Information table while keeping the manga running Zipboy app icon.
+
+## 2026-11-01
+
+Overlaps 0057 (Deflate64) and 0041 (hostile archives). Follow-ups from review: 0069 (bomb guards, Deflate64 guard bypass).

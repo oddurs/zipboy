@@ -44,3 +44,7 @@ Zipboy now includes a native macOS Settings window (⌘,) with sensible defaults
 ## 2026-11-01
 
 Refined right-hand inspector (PreviewViewController) with a framed preview well for icons/folders/archives, compact Quick Look preview for files, file/folder counts, compression ratio savings, and Finder-style contextual quick-action buttons.
+
+## 2026-11-01
+
+Overlaps 0038 (default-app offer) and 0047's compression choice. Its inspector restyle was replaced by 0067.

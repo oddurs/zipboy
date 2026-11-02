@@ -6,7 +6,7 @@ type: feature
 status: backlog
 milestone: v0.4
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 priority: p2
 effort: s
 area: system
@@ -23,5 +23,9 @@ On the third launch, one quiet sheet offers to make Zipboy the app for ZIP files
 ## Acceptance criteria
 
 - [ ] Accepting makes ZIPs open in Zipboy from the Finder
-- [ ] The offer appears at most once per Mac account
-- [ ] Settings has the same switch for anyone who said no
+- [x] The offer appears at most once per Mac account
+- [x] Settings has the same switch for anyone who said no
+
+## 2026-11-01
+
+Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Criterion 2: Settings.recordLaunchAndShouldOfferDefaultHandler offers once, on the third launch (settingsWindowReflectsAndRestoresDefaults). Criterion 3: Settings has Set for ZIP and Set for All Archives. Criterion 1 not verified on a real Mac; setDefaultApplication's completion discards its error.

@@ -60,7 +60,6 @@ build)
     lipo -create $bins -output "$app/Contents/MacOS/Zipboy"
     cp Resources/Info.plist "$app/Contents/"
     cp Resources/AppIcon.icns "$app/Contents/Resources/"
-    [ -f Resources/Help.html ] && cp Resources/Help.html "$app/Contents/Resources/"
     if exact_tag="$(git describe --tags --exact-match 2>/dev/null)"; then
         short_ver="${exact_tag#v}"
     else

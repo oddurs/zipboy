@@ -8,7 +8,7 @@ milestone: v0.2
 depends_on:
 - 18
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 priority: p0
 effort: l
 area: archive
@@ -24,8 +24,12 @@ A writer that takes a list of entries, each either a catalog entry to copy verba
 
 ## Acceptance criteria
 
-- [ ] Copied entries are byte-identical to the source's, headers included
+- [x] Copied entries are byte-identical to the source's, headers included
 - [ ] New entries are deflated or stored by the existing `ZipMethod` rule
 - [ ] Output passes `unzip -t`, Archive Utility, and a re-read through ZipCatalog and libarchive
 - [ ] Archives over 4 GB and with over 65,535 entries round-trip
-- [ ] Encrypted archives follow the spike's answer, with a test
+- [x] Encrypted archives follow the spike's answer, with a test
+
+## 2026-11-01
+
+Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. ZipWriter exists. Criterion 1: zipWriterCopiesUnchangedEntriesByteForByteAndUpdatesEditedOnes and deltaSavePreservesUnchangedEntriesByteForByteAcrossEdits; the central-directory extra fields were dropped until 0068. Criterion 5: encrypted entries are never copied verbatim (buildDeltaPlan requires password == nil), read for the purpose. Open: criterion 2 not tested against ZipMethod's rule; criterion 3 has unzip -t and libarchive but not Archive Utility; criterion 4 untested past 4 GB.

@@ -8,7 +8,7 @@ milestone: v0.2
 depends_on:
 - 13
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 priority: p2
 effort: l
 area: archive
@@ -26,6 +26,10 @@ Read Deflate64 entries through ZipCatalog with an inflate64 decoder of our own (
 
 ## Acceptance criteria
 
-- [ ] A Deflate64 fixture made with `7zz a -tzip -mm=Deflate64` opens and its contents match the source
+- [x] A Deflate64 fixture made with `7zz a -tzip -mm=Deflate64` opens and its contents match the source
 - [ ] A 3 GB Deflate64 entry made by Windows Explorer opens and extracts correctly
 - [ ] The decoder is fuzzed with the other readers in v1.0
+
+## 2026-11-01
+
+Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Built-in decoder in Deflate64.swift. Criterion 1: zip-deflate64.zip in the fixture matrix opens and matches. Criterion 2 untested. Criterion 3 belongs to 0040. The decoder skipped the bomb guards; 0069 applies them while streaming.

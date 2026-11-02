@@ -6,7 +6,7 @@ type: feature
 status: backlog
 milestone: v0.2
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 priority: p1
 effort: m
 area: document
@@ -23,5 +23,9 @@ Map each failure to a sentence a person understands plus what they can do: corru
 ## Acceptance criteria
 
 - [ ] Each case above has a message naming the file and the next step
-- [ ] The mapping lives in ZipboyKit and is unit-tested per case
+- [x] The mapping lives in ZipboyKit and is unit-tested per case
 - [ ] No libarchive or POSIX wording reaches an alert, except in a Details disclosure
+
+## 2026-11-01
+
+Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. ArchiveError.describe(_:fileName:) maps failures to sentences, with a Details disclosure in Prompts. Criterion 2: mapsEveryFailureToHumanReadableExplanation. Criteria 1 and 3 not verified case by case.
