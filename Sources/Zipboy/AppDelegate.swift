@@ -28,6 +28,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SettingsWindowController.shared.window?.makeKeyAndOrderFront(sender)
     }
 
+    /// The Dock lists the open windows itself; this adds what a document app's Dock menu offers.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(
+            withTitle: "New Archive", action: #selector(NSDocumentController.newDocument(_:)), keyEquivalent: "")
+        menu.addItem(
+            withTitle: "Open…", action: #selector(NSDocumentController.openDocument(_:)), keyEquivalent: "")
+        for item in menu.items { item.target = NSDocumentController.shared }
+        return menu
+    }
+
     @objc func showAbout(_ sender: Any?) {
         NSApp.orderFrontStandardAboutPanel(options: [.credits: Self.credits])
     }

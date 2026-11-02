@@ -492,3 +492,19 @@ struct AboutTests {
         #expect(about?.action == #selector(AppDelegate.showAbout(_:)))
     }
 }
+
+@MainActor
+struct DockMenuTests {
+    @Test func theDockMenuStartsAndOpensArchives() throws {
+        let menu = try #require(AppDelegate().applicationDockMenu(NSApplication.shared))
+        #expect(menu.items.map(\.title) == ["New Archive", "Open…"])
+        let new = menu.items[0]
+        #expect(new.target === NSDocumentController.shared)
+        #expect(new.action == #selector(NSDocumentController.newDocument(_:)))
+        #expect(menu.items[1].action == #selector(NSDocumentController.openDocument(_:)))
+
+        // The same command as the File menu's, so the two can't drift apart.
+        let file = MainMenu.make().item(withTitle: "File")?.submenu
+        #expect(file?.item(withTitle: "New Archive")?.action == new.action)
+    }
+}

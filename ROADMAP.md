@@ -87,7 +87,7 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 
 ## v0.4 — Part of the Mac
 
-`##········` 19% · 3 of 16 done · due 2027-03-12
+`###·······` 25% · 4 of 16 done · due 2027-03-12
 
 Zipboy works from the Finder as well as in its own window: Quick Look shows what's in an archive, Quick Actions compress and extract, updates arrive by themselves, and every flow works with VoiceOver and the keyboard alone.
 
@@ -102,7 +102,6 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [ ] `0036` Open an archive inside an archive in its own window <sup>feature · p2 · document</sup>
 - [ ] `0038` Offer once to open ZIPs with Zipboy <sup>feature · p2 · system</sup>
 - [ ] `0078` Finder shows an archive's contents in its icon <sup>feature · p2 · system</sup>
-- [ ] `0080` The Dock icon's menu lists open archives and starts a new one <sup>feature · p3 · shell</sup>
 - [ ] `0081` Windows come back as they were, and archives open as tabs <sup>feature · p2 · shell</sup>
 - [ ] `0083` Zipboy can be scripted with AppleScript and Shortcuts <sup>feature · p2 · system</sup>
 - [ ] `0085` Archives Zipboy owns show a Zipboy document icon <sup>feature · p3 · distribution</sup>
@@ -112,6 +111,7 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [x] `0037` Spring-loaded folders and a drop target on the empty window <sup>feature · p2 · browser</sup>
 - [x] `0039` Remember an archive's password in the Keychain, if asked <sup>feature · p3 · document</sup>
 - [x] `0066` Readable errors, hostile archive guards, Keychain passwords, spring-loaded folders, version stamping, and Help guide <sup>feature · p0 · archive</sup>
+- [x] `0080` The Dock icon's menu lists open archives and starts a new one <sup>feature · p3 · shell</sup>
 
 ## v1.0 — The promise
 
