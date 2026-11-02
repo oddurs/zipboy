@@ -455,3 +455,18 @@ final class FakeDrag: NSObject, @preconcurrency NSDraggingInfo {
     var springLoadingHighlight: NSSpringLoadingHighlight { .none }
     func resetSpringLoading() {}
 }
+
+/// Every prompt can be dismissed from the keyboard, as every Mac sheet can.
+@MainActor
+struct PromptKeyboardTests {
+    func escapes(_ alert: NSAlert) -> [String] {
+        alert.buttons.filter { $0.keyEquivalent == "\u{1b}" }.map(\.title)
+    }
+
+    @Test func everyPromptCancelsWithEscape() {
+        #expect(escapes(Prompts.passwordAlert(for: "a.zip", retry: false).0) == ["Cancel"])
+        #expect(escapes(Prompts.newPasswordAlert(mismatch: true).0) == ["Cancel"])
+        #expect(escapes(Prompts.discardAlert(toReadNamesAs: TextEncoding.allCases[0])) == ["Cancel"])
+        #expect(escapes(Prompts.Conflicts.alert(for: "a.txt", more: true)) == ["Stop"])
+    }
+}
