@@ -52,6 +52,11 @@ int archive_read_free(struct archive *);
 
 struct archive *archive_write_new(void);
 int archive_write_set_format_zip(struct archive *);
+int archive_write_set_format_pax_restricted(struct archive *);
+int archive_write_set_format_7zip(struct archive *);
+int archive_write_add_filter_gzip(struct archive *);
+int archive_write_add_filter_xz(struct archive *);
+int archive_write_add_filter_none(struct archive *);
 int archive_write_set_options(struct archive *, const char *);
 int archive_write_set_passphrase(struct archive *, const char *);
 int archive_write_zip_set_compression_deflate(struct archive *);

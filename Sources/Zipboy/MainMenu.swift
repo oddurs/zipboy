@@ -1,4 +1,5 @@
 import AppKit
+import ZipboyKit
 
 /// The menu bar, built in code because Command Line Tools can't compile a nib. Items without a target go
 /// down the responder chain, which is how the document, window, and outline each pick up their own.
@@ -75,6 +76,10 @@ enum MainMenu {
             item(
                 "Extract To…", #selector(BrowserViewController.extractTo(_:)), "e", [.command, .option],
                 symbol: "folder"))
+        menu.addItem(
+            item(
+                "Export…", #selector(ArchiveDocument.exportArchive(_:)), "e", [.command, .shift],
+                symbol: "square.and.arrow.up"))
         menu.addItem(.separator())
         // The set an autosaving app has; AppKit turns Revert into the Revert To submenu with versions.
         menu.addItem(item("Close", #selector(NSWindow.performClose(_:)), "w"))
@@ -84,6 +89,10 @@ enum MainMenu {
         menu.addItem(item("Move To…", #selector(NSDocument.move(_:))))
         menu.addItem(item("Revert To", #selector(NSDocument.revertToSaved(_:))))
         menu.addItem(.separator())
+        menu.addItem(
+            item(
+                "Verify Archive", #selector(ArchiveDocument.verifyArchive(_:)), "t", [.command, .shift],
+                symbol: "checkmark.shield"))
         menu.addItem(item("Set Password…", #selector(ArchiveDocument.choosePassword(_:)), symbol: "lock"))
         menu.addItem(item("Remove Password", #selector(ArchiveDocument.removePassword(_:)), symbol: "lock.open"))
         return menu
@@ -119,6 +128,16 @@ enum MainMenu {
             item(
                 "Show Hidden Files", #selector(BrowserViewController.toggleHiddenFiles(_:)), ".",
                 [.command, .shift]))
+        let encodingItem = item("Text Encoding", nil, symbol: "character.book.closed")
+        let encodingSubmenu = NSMenu(title: "Text Encoding")
+        for encoding in TextEncoding.allCases {
+            let entry = NSMenuItem(
+                title: encoding.title, action: #selector(ArchiveDocument.selectEncoding(_:)), keyEquivalent: "")
+            entry.representedObject = encoding.rawValue
+            encodingSubmenu.addItem(entry)
+        }
+        encodingItem.submenu = encodingSubmenu
+        menu.addItem(encodingItem)
         menu.addItem(.separator())
         menu.addItem(item("Show Toolbar", #selector(NSWindow.toggleToolbarShown(_:)), "t", [.command, .option]))
         menu.addItem(item("Customize Toolbar…", #selector(NSWindow.runToolbarCustomizationPalette(_:))))

@@ -39,6 +39,42 @@ public struct ExtractSummary: Equatable, Sendable {
     public var skipped: [String]
 }
 
+public struct VerificationReport: Equatable, Sendable {
+    public var format: String
+    public var encrypted: Bool
+    public var entryCount: Int
+    public var totalBytes: Int64
+    public var skipped: [String]
+}
+
+public enum ExportFormat: String, CaseIterable, Sendable {
+    case zip
+    case tarGz
+    case tarXz
+    case tar
+    case sevenZip
+
+    public var title: String {
+        switch self {
+        case .zip: "ZIP (.zip)"
+        case .tarGz: "TAR Gzip (.tar.gz)"
+        case .tarXz: "TAR XZ (.tar.xz)"
+        case .tar: "TAR (.tar)"
+        case .sevenZip: "7-Zip (.7z)"
+        }
+    }
+
+    public var fileExtension: String {
+        switch self {
+        case .zip: "zip"
+        case .tarGz: "tar.gz"
+        case .tarXz: "tar.xz"
+        case .tar: "tar"
+        case .sevenZip: "7z"
+        }
+    }
+}
+
 /// Reads every format libarchive knows (plus Deflate64 ZIPs) and writes ZIP, the one format worth
 /// writing back.
 public enum Archive {
@@ -57,7 +93,9 @@ public enum Archive {
     /// checked against `capacity`, the free bytes on `root`'s volume, before it is written, so a full disk
     /// or decompression bomb stops the work cleanly instead of partway through a file.
     public static func extract(
-        _ archive: URL, into root: URL, password: String? = nil, progress: ((Double) -> Bool)? = nil,
+        _ archive: URL, into root: URL, password: String? = nil,
+        encoding: TextEncoding = .auto,
+        progress: ((Double) -> Bool)? = nil,
         capacity: (() -> Int64?)? = nil
     ) throws -> ExtractSummary {
         let capacity = capacity ?? { freeSpace(on: root) }
@@ -119,7 +157,7 @@ public enum Archive {
             }
             if encrypted && password == nil { throw ArchiveError.passwordRequired }
 
-            let raw = name(of: entry, in: a)
+            let raw = name(of: entry, in: a, encoding: encoding)
             guard let path = EntryPath.sanitized(raw), !hasLinkAbove(path, in: root) else {
                 summary.skipped.append(raw)
                 archive_read_data_skip(a)
@@ -366,6 +404,228 @@ public enum Archive {
         try check(archive_write_close(a), a)
     }
 
+    /// Streams every entry in `archive` through decompression and integrity verification without
+    /// writing any files to disk. Throws an `ArchiveError` if any entry is unreadable or corrupted.
+    public static func verify(
+        _ archive: URL,
+        password: String? = nil,
+        encoding: TextEncoding = .auto,
+        progress: ((Double) -> Bool)? = nil
+    ) throws -> VerificationReport {
+        useUTF8Names()
+        guard let a = archive_read_new() else { throw ArchiveError.unreadable("Out of memory.") }
+        defer { archive_read_free(a) }
+        archive_read_support_filter_all(a)
+        for support in formats { _ = support(a) }
+        if let password { archive_read_add_passphrase(a, password) }
+        guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else {
+            throw ArchiveError.unreadable(message(a))
+        }
+
+        let total = Double((try? archive.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        func report() throws {
+            guard let progress, total > 0 else { return }
+            guard progress(min(1, Double(archive_filter_bytes(a, -1)) / total)) else {
+                throw ArchiveError.cancelled
+            }
+        }
+
+        var verification = VerificationReport(
+            format: "", encrypted: false, entryCount: 0, totalBytes: 0, skipped: [])
+        var deflate64Seen: [String: Int] = [:]
+        var buffer = [UInt8](repeating: 0, count: chunk)
+        var entry: OpaquePointer?
+
+        while true {
+            let status = archive_read_next_header(a, &entry)
+            if status == ARCHIVE_EOF { break }
+            guard status >= ARCHIVE_WARN, let entry else {
+                if isPasswordProblem(a), !canDecrypt(a) {
+                    throw ArchiveError.unsupportedEncryption(format: formatName(a))
+                }
+                if let password, !password.isEmpty, isPasswordProblem(a) { throw ArchiveError.wrongPassword }
+                if isPasswordProblem(a) { throw ArchiveError.passwordRequired }
+                throw ArchiveError.unreadable(message(a))
+            }
+            if verification.format.isEmpty, let name = archive_format_name(a) {
+                verification.format = String(cString: name)
+            }
+            try report()
+            let encrypted = archive_entry_is_encrypted(entry) != 0
+            verification.encrypted = verification.encrypted || encrypted
+            if encrypted, !canDecrypt(a) {
+                throw ArchiveError.unsupportedEncryption(format: formatName(a))
+            }
+            if encrypted && password == nil { throw ArchiveError.passwordRequired }
+
+            let raw = name(of: entry, in: a, encoding: encoding)
+            guard let path = EntryPath.sanitized(raw) else {
+                verification.skipped.append(raw)
+                archive_read_data_skip(a)
+                continue
+            }
+
+            switch Int32(archive_entry_filetype(entry)) {
+            case AE_IFDIR:
+                verification.entryCount += 1
+            case AE_IFLNK:
+                let target =
+                    string(archive_entry_symlink_utf8(entry)) ?? string(archive_entry_symlink(entry)) ?? ""
+                guard EntryPath.linkStaysInside(path: path, target: target) else {
+                    verification.skipped.append(raw)
+                    continue
+                }
+                verification.entryCount += 1
+            case AE_IFREG:
+                let size = archive_entry_size(entry)
+                var readBytes: Int64 = 0
+                while true {
+                    let limit =
+                        isXar(a) && size >= 0
+                        ? Int(min(Int64(buffer.count), max(0, size - readBytes))) : buffer.count
+                    if limit == 0 { break }
+                    let n = archive_read_data(a, &buffer, limit)
+                    if n == 0 { break }
+                    if n < 0 {
+                        if !encrypted, isZip(a), readBytes == 0, isDeflate64Problem(a) {
+                            let occ = deflate64Seen[raw, default: 0]
+                            deflate64Seen[raw] = occ + 1
+                            let devNull = try FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null"))
+                            defer { try? devNull.close() }
+                            var budget: Int64? = nil
+                            try Deflate64.extract(
+                                named: raw, occurrence: occ, from: archive, to: devNull,
+                                budget: &budget, capacity: { nil }, report: report)
+                            readBytes = max(0, size)
+                            break
+                        }
+                        if encrypted { throw ArchiveError.wrongPassword }
+                        throw ArchiveError.unreadable(message(a))
+                    }
+                    readBytes += Int64(n)
+                    try report()
+                }
+                verification.entryCount += 1
+                verification.totalBytes += readBytes
+            default:
+                verification.skipped.append(raw)
+                archive_read_data_skip(a)
+            }
+        }
+        return verification
+    }
+
+    /// Exports the contents of `root` to `destination` in the requested `format` (`.zip`, `.tar.gz`,
+    /// `.tar.xz`, `.tar`, or `.7z`) atomically via a staging file.
+    public static func export(
+        from root: URL,
+        to destination: URL,
+        format: ExportFormat,
+        compressionLevel: Settings.CompressionLevel = .balanced,
+        password: String? = nil,
+        progress: ((Double) -> Bool)? = nil
+    ) throws {
+        if format == .zip {
+            try writeZip(
+                from: root, to: destination, password: password,
+                compressionLevel: compressionLevel, progress: progress)
+            return
+        }
+        useUTF8Names()
+        let fm = FileManager.default
+        let parent = destination.deletingLastPathComponent()
+        try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        let staging = parent.appendingPathComponent(".Zipboy-\(UUID().uuidString).\(format.fileExtension)")
+        defer { try? fm.removeItem(at: staging) }
+
+        guard let a = archive_write_new() else { throw ArchiveError.unwritable("Out of memory.") }
+        defer { archive_write_free(a) }
+
+        switch format {
+        case .zip:
+            archive_write_set_format_zip(a)
+        case .tarGz:
+            archive_write_set_format_pax_restricted(a)
+            archive_write_add_filter_gzip(a)
+            _ = archive_write_set_options(a, "gzip:compression-level=\(compressionLevel.rawValue)")
+        case .tarXz:
+            archive_write_set_format_pax_restricted(a)
+            archive_write_add_filter_xz(a)
+            _ = archive_write_set_options(a, "xz:compression-level=\(compressionLevel.rawValue)")
+        case .tar:
+            archive_write_set_format_pax_restricted(a)
+            archive_write_add_filter_none(a)
+        case .sevenZip:
+            archive_write_set_format_7zip(a)
+            _ = archive_write_set_options(a, "7zip:compression-level=\(compressionLevel.rawValue)")
+        }
+
+        guard archive_write_open_filename(a, staging.path) == ARCHIVE_OK else {
+            throw ArchiveError.unwritable(message(a))
+        }
+
+        let items = try contents(of: root).map { path in
+            (path, try fm.attributesOfItem(atPath: root.appendingPathComponent(path).path))
+        }
+        let total = items.reduce(0) {
+            $0 + ($1.1[.type] as? FileAttributeType == .typeRegular ? $1.1[.size] as? Int ?? 0 : 0)
+        }
+        var written = 0
+        func report() throws {
+            guard let progress else { return }
+            guard progress(total == 0 ? 1 : Double(written) / Double(total)) else {
+                throw ArchiveError.cancelled
+            }
+        }
+
+        for (path, attributes) in items {
+            let url = root.appendingPathComponent(path)
+            guard let entry = archive_entry_new() else { throw ArchiveError.unwritable("Out of memory.") }
+            defer { archive_entry_free(entry) }
+            archive_entry_set_pathname(entry, path.precomposedStringWithCanonicalMapping)
+            archive_entry_set_perm(entry, mode_t((attributes[.posixPermissions] as? Int) ?? 0o644))
+            if let date = attributes[.modificationDate] as? Date {
+                archive_entry_set_mtime(entry, time_t(date.timeIntervalSince1970), 0)
+            }
+
+            switch attributes[.type] as? FileAttributeType {
+            case .typeDirectory?:
+                archive_entry_set_filetype(entry, UInt32(AE_IFDIR))
+                try check(archive_write_header(a, entry), a)
+            case .typeSymbolicLink?:
+                archive_entry_set_filetype(entry, UInt32(AE_IFLNK))
+                archive_entry_set_symlink(entry, try fm.destinationOfSymbolicLink(atPath: url.path))
+                try check(archive_write_header(a, entry), a)
+            case .typeRegular?:
+                archive_entry_set_filetype(entry, UInt32(AE_IFREG))
+                archive_entry_set_size(entry, Int64((attributes[.size] as? Int) ?? 0))
+                try check(archive_write_header(a, entry), a)
+                let input = try FileHandle(forReadingFrom: url)
+                defer { try? input.close() }
+                while let data = try input.read(upToCount: chunk), !data.isEmpty {
+                    let count = data.withUnsafeBytes { archive_write_data(a, $0.baseAddress, $0.count) }
+                    guard count == data.count else { throw ArchiveError.unwritable(message(a)) }
+                    written += count
+                    try report()
+                }
+            default:
+                continue
+            }
+            try check(archive_write_finish_entry(a), a)
+        }
+        try check(archive_write_close(a), a)
+
+        let fd = open(staging.path, O_RDONLY)
+        if fd >= 0 {
+            _ = fsync(fd)
+            close(fd)
+        }
+        guard rename(staging.path, destination.path) == 0 else {
+            let reason = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO).localizedDescription
+            throw ArchiveError.unwritable(reason)
+        }
+    }
+
     /// Every path under `root`, relative and sorted so parents come before children, without Finder
     /// metadata.
     public static func contents(of root: URL) throws -> [String] {
@@ -438,22 +698,31 @@ public enum Archive {
     /// An entry's name as text. ZIPs written without the UTF-8 flag hold either UTF-8, as macOS's own
     /// tools write, or code page 437, as the ZIP specification says and older Windows tools write; bytes
     /// that aren't valid UTF-8 are read as CP437 rather than shown as "".
-    private static func name(of entry: OpaquePointer, in a: OpaquePointer) -> String {
-        if isZip(a), let stored = archive_entry_pathname(entry) {
+    private static func name(
+        of entry: OpaquePointer, in a: OpaquePointer, encoding: TextEncoding = .auto
+    ) -> String {
+        if let stored = archive_entry_pathname(entry) {
             let bytes = Data(bytes: stored, count: strlen(stored))
-            return decodeZipName(bytes)
+            if encoding != .auto {
+                return encoding.decode(bytes)
+            }
+            if isZip(a) {
+                return TextEncoding.auto.decode(bytes)
+            }
         }
-        return string(archive_entry_pathname_utf8(entry)) ?? string(archive_entry_pathname(entry)) ?? ""
+        if let utf8 = string(archive_entry_pathname_utf8(entry)) {
+            return utf8
+        }
+        if let stored = archive_entry_pathname(entry) {
+            let bytes = Data(bytes: stored, count: strlen(stored))
+            return encoding.decode(bytes)
+        }
+        return ""
     }
 
     static func decodeZipName(_ bytes: Data) -> String {
-        if let text = String(data: bytes, encoding: .utf8) { return text }
-        if let text = String(data: bytes, encoding: codePage437) { return text }
-        return String(decoding: bytes, as: UTF8.self)
+        TextEncoding.auto.decode(bytes)
     }
-
-    private static let codePage437 = String.Encoding(
-        rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.dosLatinUS.rawValue)))
 
     private static func isPasswordProblem(_ a: OpaquePointer) -> Bool {
         let text = message(a).lowercased()
