@@ -15,6 +15,7 @@ enum MainMenu {
         main.addItem(submenu(window))
         NSApp.windowsMenu = window
         let help = NSMenu(title: "Help")
+        help.addItem(item("Zipboy Help", #selector(AppDelegate.showHelp(_:)), "?", symbol: "questionmark.circle"))
         main.addItem(submenu(help))
         NSApp.helpMenu = help
         return main

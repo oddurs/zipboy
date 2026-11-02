@@ -11,6 +11,20 @@ public enum ArchiveError: LocalizedError, Equatable {
     case noSpace(needed: Int64, available: Int64)
     /// The archive is encrypted in a way libarchive can't decrypt, whatever the password.
     case unsupportedEncryption(format: String)
+    /// The archive exhibits decompression-bomb or spoofed-size characteristics.
+    case suspiciousArchive(String)
+
+    public struct UserExplanation: Equatable, Sendable {
+        public let title: String
+        public let message: String
+        public let technicalDetails: String?
+
+        public init(title: String, message: String, technicalDetails: String? = nil) {
+            self.title = title
+            self.message = message
+            self.technicalDetails = technicalDetails
+        }
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -23,7 +37,155 @@ public enum ArchiveError: LocalizedError, Equatable {
             "It’s an encrypted \(format) archive, and Zipboy can’t decrypt those yet."
         case .noSpace(let needed, let available):
             "There isn’t enough space on the disk. It needs at least \(Self.size(needed)), and \(Self.size(available)) is free."
+        case .suspiciousArchive(let reason):
+            reason
         }
+    }
+
+    /// Maps any archive, Cocoa, or POSIX error to a clear human-readable sentence and actionable next step,
+    /// keeping raw `libarchive` or POSIX diagnostics in `technicalDetails`.
+    public static func describe(_ error: Error, fileName: String? = nil) -> UserExplanation {
+        let label = fileName.map { "“\($0)”" } ?? "the archive"
+        if let archiveError = error as? ArchiveError {
+            switch archiveError {
+            case .passwordRequired:
+                return UserExplanation(
+                    title: "\(label) is protected with a password.",
+                    message: "Enter the archive’s password to open or extract its contents."
+                )
+            case .wrongPassword:
+                return UserExplanation(
+                    title: "The password for \(label) wasn’t right.",
+                    message: "Check the password and try again."
+                )
+            case .unsupportedEncryption(let format):
+                return UserExplanation(
+                    title: "\(label) uses unsupported encryption.",
+                    message:
+                        "It’s an encrypted \(format) archive. Zipboy can open password-protected ZIP archives, but can’t decrypt encrypted \(format) archives yet."
+                )
+            case .noSpace(let needed, let available):
+                return UserExplanation(
+                    title: "There isn’t enough free space on the disk.",
+                    message:
+                        "Working with \(label) needs at least \(size(needed)), and only \(size(available)) is available. Free up disk space and try again."
+                )
+            case .suspiciousArchive(let reason):
+                return UserExplanation(
+                    title: "\(label) was stopped for safety.",
+                    message: reason
+                )
+            case .cancelled:
+                return UserExplanation(title: "Cancelled.", message: "")
+            case .unreadable(let raw):
+                return explainRaw(raw, label: label, writing: false)
+            case .unwritable(let raw):
+                return explainRaw(raw, label: label, writing: true)
+            }
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain {
+            switch CocoaError.Code(rawValue: nsError.code) {
+            case .fileWriteOutOfSpace:
+                return UserExplanation(
+                    title: "There isn’t enough free space on the disk.",
+                    message: "Free up disk space and try saving \(label) again.",
+                    technicalDetails: nsError.localizedDescription
+                )
+            case .fileWriteNoPermission, .fileWriteVolumeReadOnly:
+                return UserExplanation(
+                    title: "Zipboy doesn’t have permission to save \(label) here.",
+                    message:
+                        "The file or folder may be locked or read-only. Choose File > Duplicate to save a copy in another folder.",
+                    technicalDetails: nsError.localizedDescription
+                )
+            case .fileReadNoPermission:
+                return UserExplanation(
+                    title: "Zipboy doesn’t have permission to read \(label).",
+                    message: "Check the file’s permissions in Finder’s Get Info window and try again.",
+                    technicalDetails: nsError.localizedDescription
+                )
+            default:
+                break
+            }
+        }
+        if nsError.domain == NSPOSIXErrorDomain {
+            switch Int32(nsError.code) {
+            case EACCES, EPERM, EROFS:
+                return UserExplanation(
+                    title: "Zipboy doesn’t have permission to modify \(label).",
+                    message:
+                        "The file or folder is read-only. Choose File > Duplicate to save a copy in another folder.",
+                    technicalDetails: nsError.localizedDescription
+                )
+            case ENOSPC:
+                return UserExplanation(
+                    title: "There isn’t enough free space on the disk.",
+                    message: "Free up disk space and try again.",
+                    technicalDetails: nsError.localizedDescription
+                )
+            default:
+                break
+            }
+        }
+        return explainRaw(error.localizedDescription, label: label, writing: false)
+    }
+
+    private static func explainRaw(_ raw: String, label: String, writing: Bool) -> UserExplanation {
+        let lower = raw.lowercased()
+        if lower.contains("truncated") || lower.contains("premature end")
+            || lower.contains("smaller than 22 bytes") || lower.contains("end of central directory")
+        {
+            return UserExplanation(
+                title: "\(label) appears to be incomplete.",
+                message:
+                    "The archive ends unexpectedly and may not have finished downloading or copying. Try downloading or copying it again.",
+                technicalDetails: raw
+            )
+        }
+        if lower.contains("permission denied") || lower.contains("operation not permitted")
+            || lower.contains("read-only file system")
+        {
+            return UserExplanation(
+                title: "Zipboy doesn’t have permission to \(writing ? "save" : "access") \(label).",
+                message: writing
+                    ? "Choose File > Duplicate to save a copy in a folder you can write to."
+                    : "Check the file’s permissions in Finder’s Get Info window and try again.",
+                technicalDetails: raw
+            )
+        }
+        if lower.contains("no space left") || lower.contains("out of space") || lower.contains("disk full") {
+            return UserExplanation(
+                title: "There isn’t enough free space on the disk.",
+                message: "Free up some disk space and try again.",
+                technicalDetails: raw
+            )
+        }
+        if lower.contains("unsupported") || lower.contains("compression method") {
+            return UserExplanation(
+                title: "\(label) uses an unsupported archive feature.",
+                message:
+                    "This archive was created with a compression method or variant that Zipboy doesn’t support yet.",
+                technicalDetails: raw
+            )
+        }
+        if lower.contains("unrecognized archive") || lower.contains("damaged") || lower.contains("corrupt")
+            || lower.contains("bad crc") || lower.contains("checksum")
+        {
+            return UserExplanation(
+                title: "\(label) is damaged or isn’t a supported archive.",
+                message:
+                    "The archive’s contents couldn’t be verified. If it was downloaded, try downloading a fresh copy.",
+                technicalDetails: raw
+            )
+        }
+        return UserExplanation(
+            title: writing ? "\(label) couldn’t be saved." : "\(label) couldn’t be opened.",
+            message: writing
+                ? "Check that the destination folder is writable and has enough free space."
+                : "The file may be damaged or in a format Zipboy doesn’t recognize.",
+            technicalDetails: raw
+        )
     }
 
     private static func size(_ bytes: Int64) -> String {
@@ -131,6 +293,12 @@ public enum Archive {
         var summary = ExtractSummary(format: "", encrypted: false, skipped: [])
         var folders: [(URL, Date)] = []
         var deflate64Seen: [String: Int] = [:]
+        var entryCount = 0
+        var totalExtractedBytes: Int64 = 0
+        let archiveFileBytes = max(Int64(total), 4096)
+        let maxEntries = 250_000
+        let maxRatioThresholdBytes: Int64 = 64 << 20
+        let maxRatio: Int64 = 1000
         let fm = FileManager.default
         var buffer = [UInt8](repeating: 0, count: chunk)
         var entry: OpaquePointer?
@@ -146,6 +314,12 @@ public enum Archive {
                 if let password, !password.isEmpty, isPasswordProblem(a) { throw ArchiveError.wrongPassword }
                 if isPasswordProblem(a) { throw ArchiveError.passwordRequired }
                 throw ArchiveError.unreadable(message(a))
+            }
+            entryCount += 1
+            if entryCount > maxEntries {
+                throw ArchiveError.suspiciousArchive(
+                    "This archive contains more than \(maxEntries.formatted()) items and was stopped to protect against a decompression bomb."
+                )
             }
             if summary.format.isEmpty, let name = archive_format_name(a) { summary.format = String(cString: name) }
             try report()
@@ -219,7 +393,17 @@ public enum Archive {
                     try? fm.removeItem(at: url)
                     try fm.createSymbolicLink(atPath: url.path, withDestinationPath: target)
                 case AE_IFREG:
+                    let sizeSet = archive_entry_size_is_set(entry) != 0
                     let size = archive_entry_size(entry)
+                    if sizeSet && size < 0 {
+                        throw ArchiveError.suspiciousArchive(
+                            "The entry “\(path)” declares a negative file size and cannot be trusted.")
+                    }
+                    if size > maxRatioThresholdBytes, size / archiveFileBytes > maxRatio {
+                        throw ArchiveError.suspiciousArchive(
+                            "The entry “\(path)” expands to more than 1,000× the archive’s size and was stopped to protect against a decompression bomb."
+                        )
+                    }
                     if size > 0 { try reserve(size, needed: size) }
                     try? fm.removeItem(at: url)
                     guard fm.createFile(atPath: url.path, contents: nil) else {
@@ -251,6 +435,18 @@ public enum Archive {
                                 throw ArchiveError.unreadable(message(a))
                             }
                             let chunkBytes = Int64(n)
+                            if sizeSet, size > 0, !isXar(a), written + chunkBytes > size {
+                                throw ArchiveError.suspiciousArchive(
+                                    "The entry “\(path)” expanded past its declared size and was stopped."
+                                )
+                            }
+                            if totalExtractedBytes + chunkBytes > maxRatioThresholdBytes,
+                                (totalExtractedBytes + chunkBytes) / archiveFileBytes > maxRatio
+                            {
+                                throw ArchiveError.suspiciousArchive(
+                                    "This archive expands to more than 1,000× its compressed size and was stopped to protect against a decompression bomb."
+                                )
+                            }
                             try reserve(chunkBytes, needed: max(size, written + chunkBytes))
                             do {
                                 try out.write(contentsOf: buffer[0..<n])
@@ -260,6 +456,7 @@ public enum Archive {
                                     needed: max(size, written + chunkBytes), available: capacity() ?? 0)
                             }
                             written += chunkBytes
+                            totalExtractedBytes += chunkBytes
                             budget = budget.map { $0 - chunkBytes }
                             try report()
                         }

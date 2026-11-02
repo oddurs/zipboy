@@ -30,6 +30,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     private var thumbnails: [String: NSImage] = [:]
     private var requested: Set<String> = []
     private var settingsObserver: NSObjectProtocol?
+    private var springLoadWorkItem: DispatchWorkItem?
+    private var springLoadTargetPath: String?
+    var springLoadDelay: TimeInterval = 0.7
 
     private static let nameColumn = NSUserInterfaceItemIdentifier("name")
     private static let modifiedColumn = NSUserInterfaceItemIdentifier("modified")
@@ -705,9 +708,39 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     private func dropEnded() {
+        cancelSpringLoad()
         empty.highlighted = false
         outline.rootDropGlow = false
         outline.draggingDestinationFeedbackStyle = .regular
+    }
+
+    func scheduleSpringLoad(for folder: Node?) {
+        guard let folder, folder.isDirectory, !outline.isItemExpanded(folder) else {
+            cancelSpringLoad()
+            return
+        }
+        guard springLoadTargetPath != folder.path else { return }
+        cancelSpringLoad()
+        let path = folder.path
+        springLoadTargetPath = path
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.springLoadTargetPath == path,
+                    let target = self.shown?.find(path)
+                else { return }
+                self.outline.expandItem(target)
+                self.springLoadTargetPath = nil
+                self.springLoadWorkItem = nil
+            }
+        }
+        springLoadWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + springLoadDelay, execute: work)
+    }
+
+    func cancelSpringLoad() {
+        springLoadWorkItem?.cancel()
+        springLoadWorkItem = nil
+        springLoadTargetPath = nil
     }
 
     func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
@@ -799,6 +832,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         if let node = folder, !node.isDirectory { folder = node.parent }
         if folder?.path.isEmpty == true { folder = nil }
         outlineView.setDropItem(folder, dropChildIndex: NSOutlineViewDropOnItemIndex)
+        scheduleSpringLoad(for: folder)
         // A drop on a folder lights its row; a drop on the archive itself lights the tray when it's
         // empty, or the whole list's edge when it isn't.
         let onRoot = folder == nil

@@ -60,6 +60,16 @@ build)
     lipo -create $bins -output "$app/Contents/MacOS/Zipboy"
     cp Resources/Info.plist "$app/Contents/"
     cp Resources/AppIcon.icns "$app/Contents/Resources/"
+    [ -f Resources/Help.html ] && cp Resources/Help.html "$app/Contents/Resources/"
+    if exact_tag="$(git describe --tags --exact-match 2>/dev/null)"; then
+        short_ver="${exact_tag#v}"
+    else
+        latest_tag="$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")"
+        short_ver="${latest_tag#v}-dev"
+    fi
+    build_num="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $short_ver" "$app/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_num" "$app/Contents/Info.plist"
     codesign --force --sign - --options runtime "$app"
     echo "==> built $app"
     ;;

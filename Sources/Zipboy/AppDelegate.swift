@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import ZipboyKit
 
 @MainActor
@@ -13,9 +14,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.servicesProvider = self
     }
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+            NSClassFromString("XCTestCase") == nil,
+            Settings.shared.recordLaunchAndShouldOfferDefaultHandler()
+        {
+            offerDefaultZipHandler()
+        }
+    }
+
     @objc func showSettings(_ sender: Any?) {
         SettingsWindowController.shared.showWindow(sender)
         SettingsWindowController.shared.window?.makeKeyAndOrderFront(sender)
+    }
+
+    @objc func showHelp(_ sender: Any?) {
+        HelpWindowController.shared.showWindow(sender)
+        HelpWindowController.shared.window?.makeKeyAndOrderFront(sender)
+    }
+
+    private func offerDefaultZipHandler() {
+        let appURL = Bundle.main.bundleURL
+        guard appURL.pathExtension == "app" else { return }
+        if let current = NSWorkspace.shared.urlForApplication(toOpen: .zip),
+            current.standardizedFileURL == appURL.standardizedFileURL
+        {
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Open ZIP archives with Zipboy by default?"
+        alert.informativeText =
+            "Double-clicking a .zip file in the Finder will open it in Zipboy instead of Archive Utility. You can change this anytime in Settings."
+        alert.addButton(withTitle: "Make Default")
+        alert.addButton(withTitle: "Not Now")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.setDefaultApplication(at: appURL, toOpen: .zip) { _ in }
+        }
     }
 
     // MARK: Finder Services

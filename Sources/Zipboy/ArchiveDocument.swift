@@ -121,7 +121,9 @@ final class ArchiveDocument: NSDocument {
     private func unpack(_ url: URL, ofType typeName: String) async {
         let cancellation = cancelLoading
         let chosenEncoding = encoding
-        var password = self.password
+        var password = self.password ?? Keychain.password(for: url)
+        var usedSavedKeychain = (self.password == nil && password != nil)
+        var rememberEnteredInKeychain = false
         while true {
             do {
                 let (workspace, summary, parsedCatalog) = try await Task.detached { [password] in
@@ -146,6 +148,9 @@ final class ArchiveDocument: NSDocument {
                     }
                 }.value
                 guard !cancellation.isCancelled else { return workspace.discard() }
+                if summary.encrypted, rememberEnteredInKeychain, let password {
+                    Keychain.setPassword(password, for: url)
+                }
                 install(
                     workspace,
                     password: summary.encrypted ? password : nil,
@@ -161,23 +166,29 @@ final class ArchiveDocument: NSDocument {
                 return
             } catch let error as ArchiveError where error == .passwordRequired || error == .wrongPassword {
                 guard !cancellation.isCancelled else { return }
-                let entered = await Prompts.password(
-                    for: url.lastPathComponent, retry: error == .wrongPassword, in: windowForSheet)
-                guard let entered else { return close() }
-                password = entered
+                if usedSavedKeychain {
+                    Keychain.deletePassword(for: url)
+                    usedSavedKeychain = false
+                    let entered = await Prompts.password(
+                        for: url.lastPathComponent, retry: false, in: windowForSheet)
+                    guard let entered else { return close() }
+                    password = entered.password
+                    rememberEnteredInKeychain = entered.rememberInKeychain
+                } else {
+                    let entered = await Prompts.password(
+                        for: url.lastPathComponent, retry: error == .wrongPassword, in: windowForSheet)
+                    guard let entered else { return close() }
+                    password = entered.password
+                    rememberEnteredInKeychain = entered.rememberInKeychain
+                }
             } catch {
                 guard !cancellation.isCancelled else { return }
                 // The window has nothing to show, so it goes once the error is read.
-                let failure = CocoaError(
-                    .fileReadCorruptFile,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: "“\(url.lastPathComponent)” couldn’t be opened.",
-                        NSLocalizedRecoverySuggestionErrorKey: error.localizedDescription,
-                    ])
+                let alert = Prompts.makeErrorAlert(for: error, fileName: url.lastPathComponent)
                 if let window = windowForSheet {
-                    _ = await NSAlert(error: failure).beginSheetModal(for: window)
+                    _ = await alert.beginSheetModal(for: window)
                 } else {
-                    presentError(failure)
+                    alert.runModal()
                 }
                 return close()
             }
@@ -731,6 +742,9 @@ final class ArchiveDocument: NSDocument {
     func setPassword(_ new: String?) {
         let old = password
         password = new
+        if new == nil, let url = source {
+            Keychain.deletePassword(for: url)
+        }
         undoManager?.registerUndo(withTarget: self) { $0.setPassword(old) }
         undoManager?.setActionName(new == nil ? "Remove Password" : "Set Password")
         editsInvalidateAutosave()
@@ -740,12 +754,33 @@ final class ArchiveDocument: NSDocument {
     @objc func choosePassword(_ sender: Any?) {
         guard let window = windowForSheet else { return }
         Task {
-            if let entered = await Prompts.newPassword(in: window) { setPassword(entered) }
+            if let entered = await Prompts.newPassword(in: window) {
+                setPassword(entered.password)
+                if entered.rememberInKeychain, let url = source {
+                    Keychain.setPassword(entered.password, for: url)
+                }
+            }
         }
     }
 
     @objc func removePassword(_ sender: Any?) {
         setPassword(nil)
+    }
+
+    override func willPresentError(_ error: Error) -> Error {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError {
+            return error
+        }
+        let explanation = ArchiveError.describe(error, fileName: source?.lastPathComponent ?? displayName)
+        return NSError(
+            domain: nsError.domain,
+            code: nsError.code,
+            userInfo: [
+                NSLocalizedDescriptionKey: explanation.title,
+                NSLocalizedRecoverySuggestionErrorKey: explanation.message,
+            ]
+        )
     }
 
     func remove(_ paths: [String]) throws {

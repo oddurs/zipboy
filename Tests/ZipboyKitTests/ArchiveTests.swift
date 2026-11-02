@@ -546,6 +546,121 @@ import Testing
         #expect(try read("a.txt", in: extracted) == "alpha-export")
         #expect(try read("nested/b.txt", in: extracted) == "beta-export")
     }
+
+    @Test func mapsEveryFailureToHumanReadableExplanation() {
+        let truncated = ArchiveError.describe(
+            ArchiveError.unreadable("Truncated input file (needed 1048576 bytes, only 0 available)"),
+            fileName: "download.zip"
+        )
+        #expect(truncated.title.contains("“download.zip”"))
+        #expect(truncated.title.contains("incomplete"))
+        #expect(truncated.message.contains("downloading"))
+        #expect(truncated.technicalDetails?.contains("Truncated input file") == true)
+
+        let corrupt = ArchiveError.describe(
+            ArchiveError.unreadable("Unrecognized archive format"),
+            fileName: "broken.rar"
+        )
+        #expect(corrupt.title.contains("“broken.rar”"))
+        #expect(corrupt.title.contains("damaged") || corrupt.title.contains("supported"))
+
+        let unsupported = ArchiveError.describe(
+            ArchiveError.unreadable("Unsupported compression method"),
+            fileName: "novel.zip"
+        )
+        #expect(unsupported.title.contains("unsupported"))
+        #expect(unsupported.message.contains("Zipboy doesn’t support"))
+
+        let noPerm = ArchiveError.describe(
+            CocoaError(.fileWriteNoPermission),
+            fileName: "locked.zip"
+        )
+        #expect(noPerm.title.contains("permission"))
+        #expect(noPerm.message.contains("Duplicate"))
+
+        let diskFull = ArchiveError.describe(
+            ArchiveError.noSpace(needed: 500 << 20, available: 10 << 20),
+            fileName: "huge.zip"
+        )
+        #expect(diskFull.title.contains("space"))
+        #expect(diskFull.message.contains("“huge.zip”"))
+
+        let wrongPwd = ArchiveError.describe(
+            ArchiveError.wrongPassword,
+            fileName: "secret.zip"
+        )
+        #expect(wrongPwd.title.contains("password"))
+        #expect(wrongPwd.title.contains("“secret.zip”"))
+    }
+
+    @Test func stopsDecompressionBombExceedingRatioThreshold() throws {
+        let source = try folder("bomb-src")
+        // 68 MB of zeros compresses to ~68 KB in Deflate (> 1,000:1 ratio over 64 MB threshold).
+        let zeroSize = 68 << 20
+        try Data(count: zeroSize).write(to: source.appendingPathComponent("zeros.bin"))
+        let bombZip = dir.appendingPathComponent("bomb.zip")
+        try Archive.writeZip(from: source, to: bombZip, compressionLevel: .best)
+
+        let out = try folder("bomb-out")
+        do {
+            _ = try Archive.extract(bombZip, into: out)
+            Issue.record("Expected decompression bomb to be stopped by ratio guard")
+        } catch let error as ArchiveError {
+            if case .suspiciousArchive(let reason) = error {
+                #expect(reason.contains("1,000×"))
+            } else {
+                Issue.record("Unexpected ArchiveError: \(error)")
+            }
+        }
+        #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent("zeros.bin").path))
+    }
+}
+
+@Suite struct BenchmarkBudgetTests {
+    @Test func meetsCatalogDeltaSaveAndChecksumBudgets() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ZipboyBench-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let src = dir.appendingPathComponent("src")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        let bigPayload = Data((0..<(8 << 20)).map { UInt8(($0 * 131) & 0xff) })
+        try bigPayload.write(to: src.appendingPathComponent("large.bin"))
+        for i in 0..<200 {
+            try Data("entry-\(i)".utf8).write(to: src.appendingPathComponent("file-\(i).txt"))
+        }
+
+        let zip = dir.appendingPathComponent("bench.zip")
+        try Archive.writeZip(from: src, to: zip, compressionLevel: .fast)
+
+        // 1. Catalog read + tree construction budget: <= 250 ms (with 20% tolerance = 300 ms)
+        let t0 = ContinuousClock.now
+        let catalog = try ZipCatalog.read(from: zip)
+        let tree = Node.fromCatalog(catalog, root: src)
+        let catalogMs = t0.duration(to: .now) / .milliseconds(1)
+        #expect(tree.descendantCount == 201)
+        #expect(catalogMs <= 300.0, "Catalog read took \(catalogMs) ms (budget 250 ms)")
+
+        // 2. Delta save (verbatim copy of 8 MB + 199 files, 1 modified file): <= 500 ms (with 20% = 600 ms)
+        let editedURL = dir.appendingPathComponent("edited.txt")
+        try Data("updated-entry".utf8).write(to: editedURL)
+        let deltaItems: [ZipWriter.Item] =
+            catalog.entries.filter { $0.path != "file-0.txt" }.map { .verbatim($0, newPath: nil) }
+            + [.workspace(url: editedURL, path: "file-0.txt")]
+        let outZip = dir.appendingPathComponent("delta.zip")
+        let t1 = ContinuousClock.now
+        try ZipWriter.write(items: deltaItems, sourceZip: zip, to: outZip, compressionLevel: .balanced)
+        let deltaMs = t1.duration(to: .now) / .milliseconds(1)
+        #expect(deltaMs <= 600.0, "Delta save took \(deltaMs) ms (budget 500 ms)")
+
+        // 3. Streaming CRC-32 + SHA-256 of 8 MB payload: <= 300 ms (with 20% = 360 ms)
+        let t2 = ContinuousClock.now
+        let digest = try Checksums.compute(for: src.appendingPathComponent("large.bin"))
+        let checksumMs = t2.duration(to: .now) / .milliseconds(1)
+        #expect(!digest.sha256Hex.isEmpty)
+        #expect(checksumMs <= 360.0, "Checksum took \(checksumMs) ms (budget 300 ms)")
+    }
 }
 
 @Suite struct NodeTests {
