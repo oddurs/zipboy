@@ -14,6 +14,32 @@ final class ArchiveDocument: NSDocument {
         let modified: TimeInterval?
     }
 
+    /// Enough of a workspace file to tell later whether it still holds the bytes an entry was made from.
+    struct FileIdentity: Equatable, Sendable {
+        let inode: UInt64
+        let size: Int64
+        let modified: TimeInterval?
+
+        static func of(_ url: URL) -> FileIdentity? {
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                (attrs[.type] as? FileAttributeType) == .typeRegular,
+                let inode = attrs[.systemFileNumber] as? UInt64,
+                let size = attrs[.size] as? Int64
+            else { return nil }
+            return FileIdentity(
+                inode: inode, size: size, modified: (attrs[.modificationDate] as? Date)?.timeIntervalSince1970)
+        }
+
+        /// Every file under `root`, by its path there.
+        static func all(in root: URL) -> [String: FileIdentity] {
+            var result: [String: FileIdentity] = [:]
+            for path in (try? Archive.contents(of: root)) ?? [] {
+                result[path] = of(root.appendingPathComponent(path))
+            }
+            return result
+        }
+    }
+
     struct SourceSignature: Equatable, Sendable {
         let url: URL
         let inode: UInt64
@@ -262,6 +288,10 @@ final class ArchiveDocument: NSDocument {
         completionHandler: @escaping (Error?) -> Void
     ) {
         guard let workspace else { return completionHandler(CocoaError(.fileWriteUnknown)) }
+        // What the saved entries will be linked to once the save is done. Taken before the clone, so a
+        // file changed while the save writes, or even while it clones, no longer matches its entry and
+        // is compressed afresh next time. Read after the save, it would vouch for bytes never written.
+        let identities = password == nil ? FileIdentity.all(in: workspace.contents) : [:]
         let snapshot: URL
         do {
             snapshot = try workspace.snapshot()
@@ -291,7 +321,7 @@ final class ArchiveDocument: NSDocument {
                 if self.saving?.shown == true { self.report(nil) }
                 self.saving = nil
                 if error == nil {
-                    self.refreshTrackingAfterSave(to: url, for: saveOperation)
+                    self.refreshTrackingAfterSave(to: url, for: saveOperation, identities: identities)
                     self.parentDocument?.childDidSave()
                 }
             }
@@ -383,8 +413,10 @@ final class ArchiveDocument: NSDocument {
         return (items: items, sourceZip: expectedSig.url, comment: catalog.comment)
     }
 
-    private func refreshTrackingAfterSave(to url: URL, for operation: NSDocument.SaveOperationType) {
-        guard password == nil, let workspace else {
+    private func refreshTrackingAfterSave(
+        to url: URL, for operation: NSDocument.SaveOperationType, identities: [String: FileIdentity]
+    ) {
+        guard password == nil, workspace != nil else {
             catalog = nil
             trackedByInode = [:]
             sourceSignature = nil
@@ -400,10 +432,12 @@ final class ArchiveDocument: NSDocument {
         guard let targetURL, let freshCatalog = try? ZipCatalog.read(from: targetURL, encoding: encoding) else {
             return
         }
-        recordProvenance(catalog: freshCatalog, sourceURL: targetURL, workspace: workspace)
+        recordProvenance(catalog: freshCatalog, sourceURL: targetURL) { identities[$0] }
     }
 
-    private func recordProvenance(catalog: ZipCatalog?, sourceURL: URL?, workspace: Workspace) {
+    private func recordProvenance(
+        catalog: ZipCatalog?, sourceURL: URL?, identity: (_ path: String) -> FileIdentity?
+    ) {
         self.catalog = catalog
         guard let catalog, let sourceURL, let sig = SourceSignature.of(sourceURL) else {
             trackedByInode = [:]
@@ -411,16 +445,10 @@ final class ArchiveDocument: NSDocument {
             return
         }
         sourceSignature = sig
-        let fm = FileManager.default
         var map: [UInt64: TrackedFile] = [:]
         for entry in catalog.entries where !entry.isDirectory && !entry.isSymlink {
-            let itemURL = workspace.contents.appendingPathComponent(entry.path)
-            guard let attrs = try? fm.attributesOfItem(atPath: itemURL.path),
-                let inode = attrs[.systemFileNumber] as? UInt64,
-                let size = attrs[.size] as? Int64
-            else { continue }
-            let mod = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
-            map[inode] = TrackedFile(entry: entry, inode: inode, size: size, modified: mod)
+            guard let file = identity(entry.path) else { continue }
+            map[file.inode] = TrackedFile(entry: entry, inode: file.inode, size: file.size, modified: file.modified)
         }
         trackedByInode = map
     }
@@ -479,7 +507,9 @@ final class ArchiveDocument: NSDocument {
         self.workspace = workspace
         self.password = password
         loading = nil
-        recordProvenance(catalog: catalog, sourceURL: sourceURL, workspace: workspace)
+        recordProvenance(catalog: catalog, sourceURL: sourceURL) {
+            FileIdentity.of(workspace.contents.appendingPathComponent($0))
+        }
         watcher = FileWatcher(workspace.contents) { [weak self] in self?.contentsMayHaveChanged() }
         undoManager?.removeAllActions()
         rescan()

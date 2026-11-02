@@ -288,6 +288,30 @@ import ZipboyKit
         #expect(try names(in: zip) == ["fresh.txt", "keep.bin", "renamed.txt", "untitled folder"])
     }
 
+    @Test func aFileReplacedDuringASaveReachesTheNextOne() async throws {
+        // Big enough that the replacement lands while the first save is still writing.
+        let noise = try #require(FileHandle(forReadingAtPath: "/dev/urandom")).readData(ofLength: 48 << 20)
+        let document = try await document(["noise.bin": noise, "notes.txt": Data("old".utf8)])
+        defer { document.close() }
+        let zip = try #require(document.fileURL)
+
+        let pending = begin(document, to: zip, as: .saveOperation)
+        let fresh = dir.appendingPathComponent("notes.txt")
+        try Data("new content".utf8).write(to: fresh)
+        try await document.add([fresh], into: "") { _ in .replace }
+        #expect(try await finish(pending) == nil)
+        // Still a delta save for what didn't change; only the replaced file loses its entry.
+        #expect(document.verbatimEntry(forPath: "noise.bin") != nil)
+        #expect(document.verbatimEntry(forPath: "notes.txt") == nil)
+        #expect(try await save(document, to: zip, as: .saveOperation) == nil)
+
+        let root = dir.appendingPathComponent("read-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        _ = try Archive.extract(zip, into: root)
+        let saved = try String(contentsOf: root.appendingPathComponent("notes.txt"), encoding: .utf8)
+        #expect(saved == "new content")
+    }
+
     @Test func nestedArchiveTracksParentAndFinderServicesRoundTrip() async throws {
         let parentDoc = try await document(["outer.txt": Data("outer".utf8)])
         defer { parentDoc.close() }
