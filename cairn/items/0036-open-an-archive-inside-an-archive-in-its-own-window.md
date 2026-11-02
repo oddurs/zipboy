@@ -24,8 +24,12 @@ Open nested archives as child documents. Saving the child writes it back into th
 
 - [ ] Double-clicking an inner archive opens it in Zipboy with a title showing both names
 - [x] Changes saved in the child appear in the parent, which then autosaves
-- [ ] Closing the parent first asks about, or saves, the child
+- [x] Closing the parent first asks about, or saves, the child
 
 ## 2026-11-01
 
 Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Nested archives open in their own document with the parent tracked. Criterion 2: nestedArchiveTracksParentAndFinderServicesRoundTrip. Criterion 3: closing the parent deleted the workspace under an open child; 0070 (PR #26) makes the child close and save first. Criterion 1 (title with both names) not verified.
+
+## 2026-11-01
+
+Updated after 0068-0071 merged (#25, #26, #28, #30). Criterion 3: closingAParentSavesTheNestedArchiveOpenFromItFirst.

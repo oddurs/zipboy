@@ -30,3 +30,7 @@ Two Services declared in Info.plist, which Finder shows under Quick Actions: Com
 ## 2026-11-01
 
 Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Compress and Extract Here exist as NSServices in Info.plist with handlers in AppDelegate. Services appear in the Services menu, not under Quick Actions, so criterion 1 is not met as written. The handlers ran synchronously on the main thread; 0071 moves them off it. Criteria 2-4 not verified.
+
+## 2026-11-01
+
+Updated after 0068-0071 merged (#25, #26, #28, #30). The service handlers now run off the main thread (runsFinderServicesOffTheMainThread).

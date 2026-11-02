@@ -31,3 +31,7 @@ A hostile-archive suite and the guards it needs: a compression-ratio and total-s
 ## 2026-11-01
 
 Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Criterion 2: refusesEntriesThatClimbOut, refusesToWriteThroughALink, refusesToClimbOut, allowsLinksThatStayInside and refusesLinksThatLeave pass. Criterion 1: the batch's 1000:1 ratio guard also refused legitimate archives (100 MiB of zeros) and Deflate64 bypassed it; 0069 reworks it. Criterion 3 not verified.
+
+## 2026-11-01
+
+Updated after 0068-0071 merged (#25, #26, #28, #30). Criterion 1, partly: refusesATenGigabyteSingleEntryBombBeforeWritingAnything and stopsAManyEntryBombBeforeAGigabyte pass; 42.zip itself is not in the suite. Criterion 3, partly: stopsADeflate64EntryThatExpandsPastItsDeclaredSize. Hard links still bypass the guard (0075).
