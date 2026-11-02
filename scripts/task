@@ -88,6 +88,11 @@ build)
     for appex in "$app"/Contents/PlugIns/*.appex; do
         codesign --force --sign - --options runtime --entitlements Resources/QuickLook/QuickLook.entitlements "$appex"
     done
+    # The Help Book: pages from HelpTopics, indexed for the Help menu's search, sealed with the app.
+    book="$app/Contents/Resources/Zipboy.help"
+    "$(swift build -c release --triple arm64-apple-macosx14.0 --show-bin-path)/ZipboyHelpBook" "$book" "$short_ver"
+    hiutil -I corespotlight -Caf "$book/Contents/Resources/en.lproj/Zipboy.cshelpindex" "$book/Contents/Resources/en.lproj"
+    hiutil -I lsm -Caf "$book/Contents/Resources/en.lproj/Zipboy.helpindex" "$book/Contents/Resources/en.lproj"
     codesign --force --sign - --options runtime "$app"
     echo "==> built $app"
     ;;

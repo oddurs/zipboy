@@ -38,6 +38,8 @@ let package = Package(
         ),
         // Timing budgets, run by scripts/bench in a release build rather than in the test suite.
         .executableTarget(name: "ZipboyBench", dependencies: ["ZipboyKit"]),
+        // Writes the Apple Help Book from HelpTopics, at build time.
+        .executableTarget(name: "ZipboyHelpBook", dependencies: ["ZipboyKit"]),
         .testTarget(name: "ZipboyKitTests", dependencies: ["ZipboyKit"], resources: [.copy("Fixtures")]),
         .testTarget(name: "ZipboyTests", dependencies: ["Zipboy"]),
     ]

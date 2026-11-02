@@ -83,7 +83,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return text
     }
 
+    /// Help Viewer, with Zipboy's book, when the book is there and registers; otherwise the help window,
+    /// as in a test run or a debug build without the book.
     @objc func showHelp(_ sender: Any?) {
+        if Bundle.main.url(forResource: "Zipboy", withExtension: "help") != nil,
+            NSHelpManager.shared.registerBooks(in: .main)
+        {
+            NSApp.showHelp(sender)
+            return
+        }
         HelpWindowController.shared.showWindow(sender)
         HelpWindowController.shared.window?.makeKeyAndOrderFront(sender)
     }
