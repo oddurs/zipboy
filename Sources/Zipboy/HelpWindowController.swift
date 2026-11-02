@@ -145,11 +145,11 @@ final class HelpWindowController: NSWindowController, NSSearchFieldDelegate {
         for section in visibleSections {
             let box = NSBox()
             box.boxType = .custom
-            box.cornerRadius = 8
+            box.cornerRadius = Theme.Radius.m
             box.borderWidth = 1
             box.borderColor = .separatorColor
-            box.fillColor = .controlBackgroundColor
-            box.contentViewMargins = NSSize(width: 14, height: 12)
+            box.fillColor = Theme.well
+            box.contentViewMargins = NSSize(width: Theme.Space.l, height: Theme.Space.m)
             box.translatesAutoresizingMaskIntoConstraints = false
 
             let inner = NSStackView()
@@ -158,11 +158,11 @@ final class HelpWindowController: NSWindowController, NSSearchFieldDelegate {
             inner.spacing = 4
 
             let heading = NSTextField(labelWithString: section.title)
-            heading.font = .systemFont(ofSize: 13, weight: .semibold)
+            heading.font = Theme.Font.title
             heading.textColor = .labelColor
 
             let body = NSTextField(wrappingLabelWithString: section.summary)
-            body.font = .systemFont(ofSize: 12)
+            body.font = Theme.Font.callout
             body.textColor = .secondaryLabelColor
 
             inner.addArrangedSubview(heading)

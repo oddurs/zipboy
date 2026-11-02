@@ -42,23 +42,23 @@ final class EmptyStateView: NSView {
         tray.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tray)
 
-        glyph.symbolConfiguration = .init(pointSize: 38, weight: .regular)
-        title.font = .systemFont(ofSize: 16, weight: .semibold)
+        glyph.symbolConfiguration = .init(pointSize: 36, weight: .light)
+        title.font = Theme.Font.heading
         title.alignment = .center
-        detail.font = .systemFont(ofSize: 12)
+        detail.font = Theme.Font.callout
         detail.textColor = .secondaryLabelColor
         detail.alignment = .center
         choose.bezelStyle = .rounded
         choose.controlSize = .regular
-        choose.font = .systemFont(ofSize: 13, weight: .medium)
+        choose.keyEquivalent = ""
         choose.setAccessibilityLabel("Choose files to add")
 
         stack.orientation = .vertical
         stack.alignment = .centerX
-        stack.spacing = 6
-        stack.setCustomSpacing(12, after: glyph)
-        stack.setCustomSpacing(16, after: zipper)
-        stack.setCustomSpacing(14, after: detail)
+        stack.spacing = Theme.Space.xs
+        stack.setCustomSpacing(Theme.Space.m, after: glyph)
+        stack.setCustomSpacing(Theme.Space.l, after: zipper)
+        stack.setCustomSpacing(Theme.Space.l, after: detail)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
@@ -69,7 +69,7 @@ final class EmptyStateView: NSView {
             tray.heightAnchor.constraint(equalToConstant: 220),
             stack.centerXAnchor.constraint(equalTo: tray.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: tray.centerYAnchor),
-            stack.widthAnchor.constraint(lessThanOrEqualTo: tray.widthAnchor, constant: -40),
+            stack.widthAnchor.constraint(lessThanOrEqualTo: tray.widthAnchor, constant: -2 * Theme.Space.xl),
             zipper.widthAnchor.constraint(equalToConstant: 240),
             zipper.heightAnchor.constraint(equalToConstant: 34),
         ])
@@ -90,7 +90,8 @@ final class EmptyStateView: NSView {
         super.layout()
         border.frame = tray.bounds
         border.path = CGPath(
-            roundedRect: tray.bounds.insetBy(dx: 1, dy: 1), cornerWidth: 16, cornerHeight: 16, transform: nil)
+            roundedRect: tray.bounds.insetBy(dx: 1, dy: 1), cornerWidth: Theme.Radius.l + 4,
+            cornerHeight: Theme.Radius.l + 4, transform: nil)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -114,7 +115,7 @@ final class EmptyStateView: NSView {
         case .drop:
             glyph.image = NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: nil)
             title.stringValue = "Drop files here"
-            detail.stringValue = "Files and folders are zipped automatically as you go."
+            detail.stringValue = "Everything you add is zipped as you go."
         case .noResults:
             glyph.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
             title.stringValue = "No matches"
@@ -132,10 +133,10 @@ final class EmptyStateView: NSView {
         let lit = highlighted && mode == .drop
         effectiveAppearance.performAsCurrentDrawingAppearance {
             border.strokeColor = (lit ? Theme.accent : NSColor.tertiaryLabelColor).cgColor
-            border.fillColor =
-                lit ? Theme.dropFill.cgColor : NSColor.quaternaryLabelColor.withAlphaComponent(0.18).cgColor
+            border.fillColor = (lit ? Theme.dropFill : Theme.well).cgColor
         }
-        glyph.contentTintColor = lit ? Theme.accent : (mode == .drop ? .secondaryLabelColor : .tertiaryLabelColor)
+        // The one spot of brand colour in an empty window, so it reads as Zipboy's, not as an error.
+        glyph.contentTintColor = mode == .drop ? Theme.accent : .tertiaryLabelColor
         title.textColor = mode == .drop ? .labelColor : .secondaryLabelColor
 
         border.removeAllAnimations()
