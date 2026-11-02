@@ -82,8 +82,11 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 - [ ] `0026` Browse a ZIP from its catalog before anything is unpacked <sup>feature · p0 · browser</sup>
 - [ ] `0027` Unpack an entry the first time it's previewed, opened, or copied <sup>feature · p0 · document</sup>
 - [ ] `0028` Drag out with file promises so entries arrive whole <sup>feature · p1 · browser</sup>
-- [ ] `0029` Show and cancel progress for long adds and extracts <sup>feature · p1 · shell</sup>
 - [ ] `0079` Long work shows on the Dock and says when it's finished <sup>feature · p2 · shell</sup>
+
+### planned
+
+- [ ] `0029` Show and cancel progress for long adds and extracts <sup>feature · p1 · shell</sup>
 
 ## v0.4 — Part of the Mac
 

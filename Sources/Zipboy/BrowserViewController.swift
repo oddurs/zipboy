@@ -276,6 +276,8 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             do {
                 // Shown and selected where they landed, so what was added is never a mystery.
                 reveal(try await document.add(urls, into: folder) { await conflicts.resolve($0) })
+            } catch ArchiveError.cancelled {
+                // Stopped on purpose; the archive is as it was, and there's nothing to say.
             } catch {
                 document.presentError(error)
             }
@@ -483,35 +485,72 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             }
         let revealInFinder = Settings.shared.revealExtractedInFinder
         let base = document?.source.map(Naming.stem) ?? "Archive"
+        guard let document else { return }
+        let task = document.beginTask(
+            whole
+                ? "Extracting “\(document.displayName ?? "Archive")”…"
+                : urls.count == 1 ? "Extracting “\(urls[0].lastPathComponent)”…" : "Extracting \(urls.count) items…",
+            total: FileCopy.size(of: urls))
+        let progress = task.progress
+        let clone = document.cloneWhenCopying
         Task.detached {
+            defer { Task { @MainActor in document.endTask(task) } }
+            var destination = folder
             do {
-                var destination = folder
                 if wrap {
                     let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
                     destination = folder.appendingPathComponent(Naming.unique(base, isDirectory: true, taken: taken))
                     try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
                 }
-                let copied = try Self.copy(urls, into: destination)
+                let copied = try Self.copy(urls, into: destination, progress: progress, clone: clone)
                 if revealInFinder {
                     let shown = wrap ? [destination] : copied
                     await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting(shown) }
                 }
             } catch {
+                // The folder made to hold everything goes too, so a stopped extract leaves no trace.
+                if wrap { try? FileManager.default.removeItem(at: destination) }
+                if case ArchiveError.cancelled = error { return }
                 await MainActor.run { _ = NSApp.presentError(error) }
             }
         }
     }
 
     /// Copies into `folder`, numbering any name that is already there rather than overwriting it.
-    nonisolated private static func copy(_ urls: [URL], into folder: URL) throws -> [URL] {
+    /// Each item shows Finder's progress pie while it copies. Stopped through `progress`, it removes
+    /// everything it copied, and throws `ArchiveError.cancelled`.
+    nonisolated static func copy(_ urls: [URL], into folder: URL, progress: Progress, clone: Bool = true) throws
+        -> [URL]
+    {
         var taken = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
-        return try urls.map { url in
-            let name = Naming.unique(url.lastPathComponent, isDirectory: isDirectory(url), taken: taken)
-            taken.insert(name)
-            let destination = folder.appendingPathComponent(name)
-            try FileManager.default.copyItem(at: url, to: destination)
-            return destination
+        var copied: [URL] = []
+        var done: Int64 = 0
+        do {
+            for url in urls {
+                let name = Naming.unique(url.lastPathComponent, isDirectory: isDirectory(url), taken: taken)
+                taken.insert(name)
+                let destination = folder.appendingPathComponent(name)
+                let pie = Progress(totalUnitCount: max(FileCopy.size(of: [url]), 1))
+                pie.kind = .file
+                pie.fileOperationKind = .copying
+                pie.fileURL = destination
+                pie.publish()
+                defer { pie.unpublish() }
+                var bytes: Int64 = 0
+                try FileCopy.copy(url, to: destination, clone: clone) {
+                    bytes = $0
+                    pie.completedUnitCount = $0
+                    progress.completedUnitCount = done + $0
+                    return !progress.isCancelled
+                }
+                done += bytes
+                copied.append(destination)
+            }
+        } catch {
+            for url in copied { try? FileManager.default.removeItem(at: url) }
+            throw error
         }
+        return copied
     }
 
     private static func fileURLs(on pasteboard: NSPasteboard) -> [URL] {
