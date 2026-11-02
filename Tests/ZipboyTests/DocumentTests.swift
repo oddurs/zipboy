@@ -440,3 +440,77 @@ import ZipboyKit
         #expect(doc.activity == nil)
     }
 }
+
+@MainActor
+final class RecordingNotifier: Notifier {
+    var posted: [(String, String)] = []
+    func finished(_ what: String, archive: String) { posted.append((what, archive)) }
+}
+
+/// Long work shows on the Dock, and says when it's finished out of sight.
+@MainActor
+@Suite(.serialized) struct TaskWatcherTests {
+    let notifier = RecordingNotifier()
+
+    func finish(frontmost: Bool, ranFor seconds: TimeInterval, cancelled: Bool = false) throws -> ArchiveDocument {
+        // A watcher of its own, so another suite's work can't post to this one's notifier.
+        let watcher = TaskWatcher()
+        watcher.notifier = notifier
+        watcher.isFrontmost = { frontmost }
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        // Backdated rather than waited for, so the test takes no time.
+        let backdated = LongTask(
+            title: "Extracting “Photos.zip”…", total: 10, started: Date().addingTimeInterval(-seconds))
+        if cancelled { backdated.progress.cancel() }
+        watcher.began(backdated)
+        watcher.ended(backdated, in: doc)
+        return doc
+    }
+
+    @Test func finishingOutOfSightPostsOneNoticeNamingTheArchive() throws {
+        let doc = try finish(frontmost: false, ranFor: 3)
+        defer { doc.close() }
+        #expect(notifier.posted.count == 1)
+        #expect(notifier.posted.first?.0 == "Extracting “Photos.zip”")
+        #expect(notifier.posted.first?.1 == doc.displayName)
+    }
+
+    @Test func finishingInViewQuicklyOrStoppedPostsNothing() throws {
+        for doc in [
+            try finish(frontmost: true, ranFor: 3), try finish(frontmost: false, ranFor: 0.2),
+            try finish(frontmost: false, ranFor: 3, cancelled: true),
+        ] { doc.close() }
+        #expect(notifier.posted.isEmpty)
+    }
+
+    @Test func theDockShowsOneBarForEverythingRunning() throws {
+        // A watcher of its own: other suites' adds run alongside and report to the shared one.
+        let watcher = TaskWatcher()
+        let doc = ArchiveDocument()
+        let first = LongTask(title: "Adding", total: 100)
+        let second = LongTask(title: "Extracting", total: 300)
+        watcher.began(first)
+        watcher.began(second)
+        first.progress.completedUnitCount = 100
+        second.progress.completedUnitCount = 100
+        watcher.refresh()
+        #expect(watcher.fraction == 0.5)
+        #expect(watcher.tile.view?.fraction == 0.5)
+
+        watcher.ended(first, in: doc)
+        watcher.ended(second, in: doc)
+        #expect(watcher.fraction == nil)
+        #expect(watcher.tile.view == nil)
+    }
+
+    @Test func clickingANoticeBringsItsArchiveForward() throws {
+        let doc = ArchiveDocument()
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        #expect(TaskWatcher.bringForward(archiveNamed: doc.displayName) === doc)
+        #expect(doc.windowControllers.first?.window?.isVisible == true)
+        #expect(TaskWatcher.bringForward(archiveNamed: "Nothing by this name") == nil)
+    }
+}

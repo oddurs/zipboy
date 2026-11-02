@@ -72,7 +72,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 
 ## v0.3 — Opens instantly
 
-`··········` 0% · 0 of 6 done · due 2027-01-29
+`##········` 17% · 1 of 6 done · due 2027-01-29
 
 Any ZIP, however large, shows its contents in under a second and costs no disk space until a file inside is actually previewed, opened, or dragged out.
 
@@ -82,11 +82,14 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 - [ ] `0026` Browse a ZIP from its catalog before anything is unpacked <sup>feature · p0 · browser</sup>
 - [ ] `0027` Unpack an entry the first time it's previewed, opened, or copied <sup>feature · p0 · document</sup>
 - [ ] `0028` Drag out with file promises so entries arrive whole <sup>feature · p1 · browser</sup>
-- [ ] `0079` Long work shows on the Dock and says when it's finished <sup>feature · p2 · shell</sup>
 
 ### planned
 
 - [ ] `0029` Show and cancel progress for long adds and extracts <sup>feature · p1 · shell</sup>
+
+### done
+
+- [x] `0079` Long work shows on the Dock and says when it's finished <sup>feature · p2 · shell</sup>
 
 ## v0.4 — Part of the Mac
 
