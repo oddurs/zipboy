@@ -1,54 +1,14 @@
 import AppKit
+import ZipboyKit
 
 /// Offline Help guide window (`Help > Zipboy Help`, `⌘?`), searchable across all archive workflows.
 @MainActor
 final class HelpWindowController: NSWindowController, NSSearchFieldDelegate {
     static let shared = HelpWindowController()
 
-    struct Section: Equatable {
-        let title: String
-        let summary: String
-        let keywords: [String]
-    }
+    typealias Section = HelpTopics.Topic
 
-    static let allSections: [Section] = [
-        Section(
-            title: "Opening & Browsing Archives",
-            summary:
-                "Open ZIP, RAR, 7z, TAR, Gzip, Bzip2, XZ, Zstandard, LHA, CAB, ISO, CPIO, and XAR archives with ⌘O or by dragging them onto Zipboy. Press Space for Quick Look, or double-click a nested archive to open it in its own Zipboy window.",
-            keywords: ["open", "browse", "quick look", "space", "nested", "rar", "7z", "tar", "zip"]
-        ),
-        Section(
-            title: "Adding, Renaming, & Deleting Files",
-            summary:
-                "Drag files and folders from Finder into the archive, or press ⌘⇧A to add files and ⌘⇧N for a new folder. Hovering a dragged item over a collapsed folder for 0.7 seconds springs it open. Press Return to rename, Delete to remove, and ⌘Z to undo any edit.",
-            keywords: ["add", "rename", "delete", "new folder", "undo", "redo", "drag", "spring"]
-        ),
-        Section(
-            title: "Extracting & Dragging Out",
-            summary:
-                "Drag any files or folders out to Finder, press ⌘E to extract to your default destination (configured in Settings), or press ⌥⌘E to choose a destination folder.",
-            keywords: ["extract", "unpack", "finder", "drag out", "destination", "wrap"]
-        ),
-        Section(
-            title: "Passwords & AES-256 Encryption",
-            summary:
-                "Choose File > Set Password… to encrypt the archive with AES-256 when saved, or File > Remove Password to save it unencrypted. Check “Remember password in Keychain” on the password sheet so reopening the archive needs no password prompt.",
-            keywords: ["password", "encrypt", "aes", "keychain", "lock", "security", "decrypt"]
-        ),
-        Section(
-            title: "Integrity Verification & Checksums",
-            summary:
-                "Choose File > Verify Archive (⌘⇧T) or click Verify in the Inspector to test every entry’s integrity without writing files to disk. Select any file to see its CRC-32 and SHA-256 checksums in the right-hand Inspector (⌥⌘I).",
-            keywords: ["verify", "checksum", "crc32", "sha256", "integrity", "corrupt", "inspector"]
-        ),
-        Section(
-            title: "Exporting & Legacy Filename Encodings",
-            summary:
-                "Choose File > Export… (⌘⇧E) to write the archive as .zip, .tar.gz, .tar.xz, .tar, or .7z. If an archive created on another system displays garbled filenames, choose View > Text Encoding to re-read names in Shift-JIS, GB18030, Big5, EUC-KR, Windows-1251, Windows-1252, or CP437.",
-            keywords: ["export", "tar", "7z", "encoding", "shift-jis", "gb18030", "cp437", "unicode"]
-        ),
-    ]
+    static let allSections = HelpTopics.all
 
     let searchField = NSSearchField()
     private let stack = NSStackView()

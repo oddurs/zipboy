@@ -138,6 +138,9 @@ An archive behaves like a Finder folder, reliably, for anyone: hardened against 
 - [ ] `0044` A two-week public beta with every crash and data-loss report closed <sup>chore · p0 · quality</sup>
 - [ ] `0045` Release checklist and the v1.0 tag <sup>chore · p0 · distribution</sup>
 - [ ] `0082` Every user-facing string goes through the localization tables <sup>chore · p2 · quality</sup>
+
+### planned
+
 - [ ] `0084` Help menu search finds Zipboy's own help topics <sup>feature · p2 · distribution</sup>
 
 ## later — Later

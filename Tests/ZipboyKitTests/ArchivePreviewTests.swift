@@ -143,3 +143,28 @@ struct ErrorWordingTests {
         #expect(said.message.contains("“lzma”"))
     }
 }
+
+/// The Help Book pages, made from the same topics the help window shows.
+struct HelpTopicsTests {
+    @Test func everyTopicHasAPageAndTheIndexLinksIt() {
+        let index = HelpTopics.index()
+        #expect(Set(HelpTopics.all.map(\.anchor)).count == HelpTopics.all.count)
+        for topic in HelpTopics.all {
+            let page = HelpTopics.page(for: topic)
+            #expect(page.contains("<a name=\"\(topic.anchor)\">"), "\(topic.anchor)")
+            #expect(page.contains("<title>\(HelpTopics.escape(topic.title))</title>"), "\(topic.anchor)")
+            // What Help menu search matches against.
+            #expect(page.contains("<meta name=\"keywords\""), "\(topic.anchor)")
+            #expect(index.contains("href=\"\(topic.anchor).html\""), "\(topic.anchor)")
+        }
+        #expect(HelpTopics.all.contains { $0.anchor == "password" && $0.keywords.contains("password") })
+    }
+
+    @Test func theBookNamesItsIndexesAndFirstPage() {
+        let info = HelpTopics.bookInfo(version: "1.2.3")
+        #expect(info["HPDBookAccessPath"] as? String == "index.html")
+        #expect(info["HPDBookCSIndexPath"] as? String == "Zipboy.cshelpindex")
+        #expect(info["HPDBookIndexPath"] as? String == "Zipboy.helpindex")
+        #expect(info["CFBundleIdentifier"] as? String == HelpTopics.bookIdentifier)
+    }
+}

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import ZipboyKit
 
 /// What scripts/task assembles into the app bundle, checked against the source tree.
 @Suite struct BundleTests {
@@ -119,6 +120,16 @@ import Testing
                 FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("Resources/\(name)").path),
                 "\(name)")
         }
+    }
+
+    @Test func registersItsHelpBook() throws {
+        let info = try Self.infoPlist()
+        // Help Viewer finds the book by this pair: the folder in Resources, and the book's identifier.
+        #expect(info["CFBundleHelpBookFolder"] as? String == "Zipboy.help")
+        #expect(info["CFBundleHelpBookName"] as? String == HelpTopics.bookIdentifier)
+        let task = try String(contentsOf: Self.root.appendingPathComponent("scripts/task"), encoding: .utf8)
+        #expect(task.contains("ZipboyHelpBook"))
+        #expect(task.contains("hiutil -I corespotlight") && task.contains("hiutil -I lsm"))
     }
 
     @Test func shipsItsIcon() throws {
