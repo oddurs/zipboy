@@ -3,7 +3,7 @@ id: 83
 uid: 904bb285-8b1a-4b71-bd50-9b85a6e50987
 title: Zipboy can be scripted with AppleScript and Shortcuts
 type: feature
-status: backlog
+status: planned
 milestone: v0.4
 created: 2026-11-02
 updated: 2026-11-02
@@ -27,7 +27,11 @@ them through Run AppleScript. Revisit App Intents if the build ever gains Xcode.
 
 ## Acceptance criteria
 
-- [ ] `osascript -e 'tell application "Zipboy" to extract POSIX file "/tmp/a.zip" to POSIX file "/tmp/out"'` extracts, covered by a test that runs the command handler directly
-- [ ] `make archive` writes a ZIP holding the given files
+- [x] `osascript -e 'tell application "Zipboy" to extract POSIX file "/tmp/a.zip" to POSIX file "/tmp/out"'` extracts, covered by a test that runs the command handler directly
+- [x] `make archive` writes a ZIP holding the given files
 - [ ] Script Editor's Open Dictionary shows both commands with descriptions
-- [ ] A bad path fails with an AppleScript error naming the path, not a crash
+- [x] A bad path fails with an AppleScript error naming the path, not a crash
+
+## 2026-11-02
+
+2026-11-02. Commands are extract <archive> [to <folder>] and compress <files> [into <folder>], not make archive at …: make is the standard suite's object-creation command, and these two read as plainly as the Finder services they reuse (AppDelegate.extractArchives / compressFiles). Each suspends the Apple event and works off the main thread. ScriptingTests: round trip, a missing path gives -43 naming the path, one file or a list. BundleTests ties the sdef's cocoa classes to their @objc names and checks the build copies it; xmllint --xinclude validates it. Criterion 3 (Script Editor's dictionary) not checked on screen this session.

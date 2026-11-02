@@ -61,7 +61,7 @@ build)
     # shellcheck disable=SC2086
     lipo -create $bins -output "$app/Contents/MacOS/Zipboy"
     cp Resources/Info.plist "$app/Contents/"
-    cp Resources/AppIcon.icns "$app/Contents/Resources/"
+    cp Resources/AppIcon.icns Resources/Zipboy.sdef "$app/Contents/Resources/"
     # Each Quick Look extension is a bundle of its own in PlugIns, its plist in Resources/<name>/.
     for ext in $extensions; do
         appex="$app/Contents/PlugIns/$ext.appex"

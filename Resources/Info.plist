@@ -6,31 +6,8 @@
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>Zipboy</string>
-	<key>CFBundleExecutable</key>
-	<string>Zipboy</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
-	<key>CFBundleIdentifier</key>
-	<string>com.oddurs.zipboy</string>
-	<key>CFBundleName</key>
-	<string>Zipboy</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
-	<key>CFBundleVersion</key>
-	<string>1</string>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.utilities</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Oddur Sigurdsson</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
-		<!-- The first Editor type is what File > New makes and what everything saves as. -->
 		<dict>
 			<key>CFBundleTypeName</key>
 			<string>ZIP Archive</string>
@@ -85,8 +62,6 @@
 			<key>NSDocumentClass</key>
 			<string>ArchiveDocument</string>
 		</dict>
-		<!-- No class: AppDelegate catches these and puts them in a new archive, so files and folders can be
-		     dropped on the Dock icon. Rank None keeps the app out of their Open With menus. -->
 		<dict>
 			<key>CFBundleTypeName</key>
 			<string>Anything to Compress</string>
@@ -101,199 +76,30 @@
 			</array>
 		</dict>
 	</array>
-	<key>UTImportedTypeDeclarations</key>
-	<array>
-		<!-- macOS lacks built-in UTTypes for several common archive extensions; without these,
-		     Finder and Open panels treat them as generic data. -->
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>com.rarlab.rar-archive</string>
-			<key>UTTypeDescription</key>
-			<string>RAR Archive</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>rar</string>
-					<string>cbr</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/vnd.rar</string>
-					<string>application/x-rar-compressed</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>org.tukaani.lzma-archive</string>
-			<key>UTTypeDescription</key>
-			<string>LZMA Archive</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>lzma</string>
-					<string>tlz</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/x-lzma</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>com.facebook.zstd-archive</string>
-			<key>UTTypeDescription</key>
-			<string>Zstandard Archive</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>zst</string>
-					<string>tzst</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/zstd</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>org.lz4.lz4-archive</string>
-			<key>UTTypeDescription</key>
-			<string>LZ4 Archive</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>lz4</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/x-lz4</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>org.lzop.lzo-archive</string>
-			<key>UTTypeDescription</key>
-			<string>LZOP Archive</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>lzo</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/x-lzop</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>public.lha-archive</string>
-			<key>UTTypeDescription</key>
-			<string>LHA Archive</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>lha</string>
-					<string>lzh</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/x-lzh-compressed</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>public.ar-archive</string>
-			<key>UTTypeDescription</key>
-			<string>Unix Archiver Package</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>ar</string>
-					<string>deb</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/x-archive</string>
-					<string>application/vnd.debian.binary-package</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>com.winzip.zipx-archive</string>
-			<key>UTTypeDescription</key>
-			<string>Extended ZIP Package</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>zipx</string>
-					<string>cbz</string>
-					<string>cb7</string>
-					<string>cbt</string>
-					<string>taz</string>
-					<string>apk</string>
-					<string>whl</string>
-					<string>xpi</string>
-					<string>nupkg</string>
-					<string>ear</string>
-				</array>
-			</dict>
-		</dict>
-	</array>
+	<key>CFBundleExecutable</key>
+	<string>Zipboy</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.oddurs.zipboy</string>
+	<key>CFBundleName</key>
+	<string>Zipboy</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSAppleScriptEnabled</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Oddur Sigurdsson</string>
 	<key>NSServices</key>
 	<array>
 		<dict>
@@ -325,6 +131,199 @@
 			<array>
 				<string>public.archive</string>
 			</array>
+		</dict>
+	</array>
+	<key>OSAScriptingDefinition</key>
+	<string>Zipboy.sdef</string>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>RAR Archive</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.rarlab.rar-archive</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>rar</string>
+					<string>cbr</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.rar</string>
+					<string>application/x-rar-compressed</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>LZMA Archive</string>
+			<key>UTTypeIdentifier</key>
+			<string>org.tukaani.lzma-archive</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lzma</string>
+					<string>tlz</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-lzma</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Zstandard Archive</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.facebook.zstd-archive</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>zst</string>
+					<string>tzst</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/zstd</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>LZ4 Archive</string>
+			<key>UTTypeIdentifier</key>
+			<string>org.lz4.lz4-archive</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lz4</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-lz4</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>LZOP Archive</string>
+			<key>UTTypeIdentifier</key>
+			<string>org.lzop.lzo-archive</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lzo</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-lzop</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>LHA Archive</string>
+			<key>UTTypeIdentifier</key>
+			<string>public.lha-archive</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lha</string>
+					<string>lzh</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-lzh-compressed</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Unix Archiver Package</string>
+			<key>UTTypeIdentifier</key>
+			<string>public.ar-archive</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ar</string>
+					<string>deb</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-archive</string>
+					<string>application/vnd.debian.binary-package</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Extended ZIP Package</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.winzip.zipx-archive</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>zipx</string>
+					<string>cbz</string>
+					<string>cb7</string>
+					<string>cbt</string>
+					<string>taz</string>
+					<string>apk</string>
+					<string>whl</string>
+					<string>xpi</string>
+					<string>nupkg</string>
+					<string>ear</string>
+				</array>
+			</dict>
 		</dict>
 	</array>
 </dict>

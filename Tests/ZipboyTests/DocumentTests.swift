@@ -514,3 +514,50 @@ final class RecordingNotifier: Notifier {
         #expect(TaskWatcher.bringForward(archiveNamed: "Nothing by this name") == nil)
     }
 }
+
+/// What AppleScript's `extract` and `compress` do, run directly rather than through an Apple event.
+@Suite struct ScriptingTests {
+    func folder() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("script-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("a".utf8).write(to: dir.appendingPathComponent("a.txt"))
+        try Data("b".utf8).write(to: dir.appendingPathComponent("b.txt"))
+        return dir
+    }
+
+    @Test func compressThenExtractRoundTrips() throws {
+        let dir = try folder()
+        let out = dir.appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let zip = try Scripting.compress(
+            [dir.appendingPathComponent("a.txt"), dir.appendingPathComponent("b.txt")], into: out)
+        #expect(zip.pathExtension == "zip")
+        #expect(zip.deletingLastPathComponent().standardizedFileURL == out.standardizedFileURL)
+
+        let unpacked = dir.appendingPathComponent("unpacked")
+        try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
+        let results = try Scripting.extract(zip, to: unpacked)
+        #expect(!results.isEmpty)
+        let names = try FileManager.default.subpathsOfDirectory(atPath: unpacked.path)
+        #expect(names.contains { $0.hasSuffix("a.txt") } && names.contains { $0.hasSuffix("b.txt") })
+    }
+
+    @Test func aMissingPathIsNamedInTheError() throws {
+        let gone = URL(fileURLWithPath: "/tmp/zipboy-not-here-\(UUID().uuidString).zip")
+        do {
+            _ = try Scripting.extract(gone, to: nil)
+            Issue.record("extracted a file that isn't there")
+        } catch {
+            let (number, message) = Scripting.scriptError(for: error)
+            #expect(number == -43)
+            #expect(message.contains(gone.path))
+        }
+    }
+
+    @Test func takesOneFileOrAList() {
+        let a = URL(fileURLWithPath: "/a")
+        #expect(Scripting.urls(from: a) == [a])
+        #expect(Scripting.urls(from: [a, a] as [Any]) == [a, a])
+        #expect(Scripting.urls(from: "not a file").isEmpty)
+    }
+}

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<dictionary title="Zipboy Terminology" xmlns:xi="http://www.w3.org/2003/XInclude">
+	<xi:include href="file:///System/Library/ScriptingDefinitions/CocoaStandard.sdef" xpointer="xpointer(/dictionary/suite)"/>
+	<suite name="Zipboy Suite" code="Zpby" description="Make and unpack archives without opening a window.">
+		<command name="extract" code="ZpbyExtr" description="Unpack an archive, as Extract Here in Finder does.">
+			<cocoa class="ZipboyExtractCommand"/>
+			<direct-parameter type="file" description="The archive to unpack."/>
+			<parameter name="to" code="Dest" type="file" optional="yes" description="The folder to unpack into. Next to the archive if left out.">
+				<cocoa key="Destination"/>
+			</parameter>
+			<result description="What was unpacked.">
+				<type type="file" list="yes"/>
+			</result>
+		</command>
+		<command name="compress" code="ZpbyComp" description="Make a ZIP archive of files and folders, as Compress with Zipboy does.">
+			<cocoa class="ZipboyCompressCommand"/>
+			<direct-parameter description="The files and folders to put in the archive.">
+				<type type="file" list="yes"/>
+			</direct-parameter>
+			<parameter name="into" code="Dest" type="file" optional="yes" description="The folder for the new ZIP. Next to the first file if left out.">
+				<cocoa key="Destination"/>
+			</parameter>
+			<result type="file" description="The new ZIP archive."/>
+		</command>
+	</suite>
+</dictionary>
