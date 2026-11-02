@@ -40,7 +40,7 @@ enum MainMenu {
 
     private static func appMenu() -> NSMenu {
         let menu = NSMenu(title: "Zipboy")
-        menu.addItem(item("About Zipboy", #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+        menu.addItem(item("About Zipboy", #selector(AppDelegate.showAbout(_:))))
         menu.addItem(.separator())
         menu.addItem(item("Settings…", #selector(AppDelegate.showSettings(_:)), ",", symbol: "gearshape"))
         menu.addItem(.separator())

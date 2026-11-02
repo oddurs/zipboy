@@ -28,6 +28,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SettingsWindowController.shared.window?.makeKeyAndOrderFront(sender)
     }
 
+    @objc func showAbout(_ sender: Any?) {
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: Self.credits])
+    }
+
+    /// What the About panel says beneath the version: what Zipboy is built on, and where to find it.
+    static var credits: NSAttributedString {
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        let plain: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: centered,
+        ]
+        func link(_ title: String, _ url: String) -> NSAttributedString {
+            var attributes = plain
+            attributes[.link] = URL(string: url)
+            return NSAttributedString(string: title, attributes: attributes)
+        }
+        let text = NSMutableAttributedString(
+            string: "Reads and writes archives with libarchive, which ships with macOS.\n", attributes: plain)
+        text.append(link("Source Code", "https://github.com/oddurs/zipboy"))
+        text.append(NSAttributedString(string: "  ·  ", attributes: plain))
+        text.append(link("Report an Issue", "https://github.com/oddurs/zipboy/issues"))
+        return text
+    }
+
     @objc func showHelp(_ sender: Any?) {
         HelpWindowController.shared.showWindow(sender)
         HelpWindowController.shared.window?.makeKeyAndOrderFront(sender)
