@@ -6,7 +6,7 @@ type: feature
 status: backlog
 milestone: v0.2
 created: 2026-10-20
-updated: 2026-11-01
+updated: 2026-11-02
 priority: p1
 effort: m
 area: document
@@ -29,3 +29,7 @@ Map each failure to a sentence a person understands plus what they can do: corru
 ## 2026-11-01
 
 Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. ArchiveError.describe(_:fileName:) maps failures to sentences, with a Details disclosure in Prompts. Criterion 2: mapsEveryFailureToHumanReadableExplanation. Criteria 1 and 3 not verified case by case.
+
+## 2026-11-02
+
+2026-11-02: in the completeness pass, recovery buttons (Duplicate on a permission error, Show in Finder on a full disk) are part of finishing criterion 1, not a separate item.

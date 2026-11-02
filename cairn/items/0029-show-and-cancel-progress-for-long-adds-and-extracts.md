@@ -6,7 +6,7 @@ type: feature
 status: backlog
 milestone: v0.3
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-02
 priority: p1
 effort: m
 area: shell
@@ -25,3 +25,7 @@ Publish an `NSProgress` per operation, shown in the window's subtitle and, for e
 - [ ] Operations longer than 1 second show progress in the subtitle
 - [ ] Extracting shows Finder's progress pie on the destination
 - [ ] Cancelling leaves neither partial files at the destination nor half-added items in the archive
+
+## 2026-11-02
+
+2026-11-02: the Dock tile and the finish notification are 0079, which builds on the Progress this item publishes.
