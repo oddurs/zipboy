@@ -3,10 +3,11 @@ id: 30
 uid: a44f81d5-f314-4d79-bb7f-d0dd9167e587
 title: Can SwiftPM and Command Line Tools build and sign a Quick Look extension?
 type: spike
-status: backlog
+status: done
 milestone: v0.4
+assignee: Oddur Sigurdsson
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-02
 priority: p0
 effort: s
 area: system
@@ -25,3 +26,15 @@ Finder previews of archives are the most visible integration, and the build syst
 One day. The answer is a working hello-world extension, or a decision to require Xcode for this target.
 
 ## Answer
+
+Yes, entirely with Command Line Tools. SwiftPM builds the extension as an executable target whose
+entry point is `NSExtensionMain` (`-Xlinker -e -Xlinker _NSExtensionMain`, plus `-application-extension`).
+`scripts/task build` lays out `Contents/PlugIns/ZipboyQuickLook.appex`, lipos both architectures, and
+signs the extension ad hoc with the app-sandbox entitlement before signing the app. `lsregister` then
+`pluginkit -m` lists it, and Quick Look launches it and calls `providePreview` (seen in the system log
+from a `QLPreviewView` in another process). A data-based preview (`QLIsDataBasedPreview`, returning
+HTML) needs no view controller.
+
+Two traps: `qlmanage -p -o` crashes inside ExtensionFoundation ("key cannot be nil") for app
+extensions, so it is no test; and a `.tar.gz` is typed as gzip by its last extension, so the
+single-file compressor types must be declared too. Notarized distribution is still 0058's question.
