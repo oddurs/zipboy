@@ -24,8 +24,10 @@ final class EmptyStateView: NSView {
     private let glyph = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
-    private let choose = NSButton(
-        title: "Choose Files…", target: nil, action: #selector(BrowserViewController.addFiles(_:)))
+    /// The window's one prominent action while there is nothing else to act on: the inspector hides
+    /// its footer for an empty archive.
+    private let choose = ActionButton(
+        "Choose Files…", action: #selector(BrowserViewController.addFiles(_:)), prominent: true)
     private let zipper = ZipperProgressView()
     private let stack: NSStackView
 
@@ -48,9 +50,6 @@ final class EmptyStateView: NSView {
         detail.font = Theme.Font.callout
         detail.textColor = .secondaryLabelColor
         detail.alignment = .center
-        choose.bezelStyle = .rounded
-        choose.controlSize = .regular
-        choose.keyEquivalent = ""
         choose.setAccessibilityLabel("Choose files to add")
 
         stack.orientation = .vertical
@@ -103,7 +102,7 @@ final class EmptyStateView: NSView {
     var isAnimating: Bool { border.animation(forKey: "march") != nil }
 
     /// The Choose Files… button, for tests.
-    var chooseButton: NSButton { choose }
+    var chooseButton: ActionButton { choose }
 
     private func update() {
         let loading: Double? = if case .loading(let done) = mode { done } else { nil }

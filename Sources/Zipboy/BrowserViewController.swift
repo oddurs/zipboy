@@ -19,6 +19,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     /// The tree on screen: the document's, or a filtered copy while searching.
     private var shown: Node?
     private var query = ""
+    /// The folders open when a search began. A search opens every folder holding a match, so its own
+    /// state is no guide to what to put back when it ends.
+    private var openBeforeSearch: [String] = []
     private var sortKey = Node.SortKey.name
     private var ascending = true
     /// Paths being dragged from this list, to tell a move inside the archive from an add.
@@ -111,8 +114,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: Contents
 
-    /// Rebuilds the list from the document, keeping what was open and selected.
-    func reload() {
+    /// Rebuilds the list from the document, keeping what was open and selected, or opening `restoring`
+    /// instead and revealing the selection inside it.
+    func reload(restoring: [String]? = nil) {
         loadViewIfNeeded()
         if let done = document?.loading {
             empty.mode = .loading(done)
@@ -121,7 +125,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             return
         }
         guard let tree = document?.tree else { return }
-        let open = expandedPaths()
+        let open = restoring ?? expandedPaths()
         let selected = selection.map(\.path)
 
         tree.sort(
@@ -140,7 +144,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         } else {
             outline.expandItem(nil, expandChildren: true)
         }
-        select(selected)
+        if restoring != nil { reveal(selected) } else { select(selected) }
 
         let hasRows = shown?.children.isEmpty == false
         empty.isHidden = hasRows
@@ -158,8 +162,11 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     func filter(_ text: String) {
-        query = text.trimmingCharacters(in: .whitespaces)
-        reload()
+        let next = text.trimmingCharacters(in: .whitespaces)
+        if query.isEmpty, !next.isEmpty { openBeforeSearch = expandedPaths() }
+        let ending = !query.isEmpty && next.isEmpty
+        query = next
+        reload(restoring: ending ? openBeforeSearch : nil)
     }
 
     private func expandedPaths() -> [String] {
@@ -494,34 +501,38 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let nodes = targets
-        func add(_ title: String, _ action: Selector) {
-            menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self
+        // The same symbols the menu bar gives these commands, so the two menus read as one.
+        func add(_ title: String, _ action: Selector, _ symbol: String) {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         }
         if nodes.isEmpty {
-            add("Add Files…", #selector(addFiles(_:)))
-            add("New Folder", #selector(newFolder(_:)))
+            add("Add Files…", #selector(addFiles(_:)), "doc.badge.plus")
+            add("New Folder", #selector(newFolder(_:)), "folder.badge.plus")
             if NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
-                add("Paste", #selector(paste(_:)))
+                add("Paste", #selector(paste(_:)), "doc.on.clipboard")
             }
             return
         }
         let one = nodes.count == 1 ? "“\(nodes[0].name)”" : "\(nodes.count) Items"
-        add("Open", #selector(openItems(_:)))
+        add("Open", #selector(openItems(_:)), "arrow.up.forward.app")
         if nodes.count == 1, let node = nodes.first, !node.isDirectory {
             let openWith = NSMenuItem(title: "Open With", action: nil, keyEquivalent: "")
+            openWith.image = NSImage(systemSymbolName: "arrow.up.forward.square", accessibilityDescription: nil)
             openWith.submenu = openWithMenu(for: node.url)
             menu.addItem(openWith)
         }
-        add("Quick Look \(one)", #selector(quickLookClicked(_:)))
+        add("Quick Look \(one)", #selector(quickLookClicked(_:)), "eye")
         menu.addItem(.separator())
-        add("Extract \(one)", #selector(extract(_:)))
-        add("Extract \(one) To…", #selector(extractTo(_:)))
-        add("Copy", #selector(copy(_:)))
+        add("Extract \(one)", #selector(extract(_:)), "arrow.down.to.line")
+        add("Extract \(one) To…", #selector(extractTo(_:)), "folder")
+        add("Copy", #selector(copy(_:)), "doc.on.doc")
         menu.addItem(.separator())
-        if nodes.count == 1 { add("Rename", #selector(rename(_:))) }
-        add("New Folder", #selector(newFolder(_:)))
+        if nodes.count == 1 { add("Rename", #selector(rename(_:)), "pencil") }
+        add("New Folder", #selector(newFolder(_:)), "folder.badge.plus")
         menu.addItem(.separator())
-        add("Delete", #selector(delete(_:)))
+        add("Delete", #selector(delete(_:)), "trash")
     }
 
     /// The default app first, then the rest by name, as in Finder.
@@ -698,12 +709,17 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         }
     }
 
-    private static func listDate(_ date: Date) -> String {
+    /// One formatter for every row: making one per cell made scrolling a big archive stutter.
+    private static let listDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         formatter.doesRelativeDateFormatting = true
-        return formatter.string(from: date)
+        return formatter
+    }()
+
+    private static func listDate(_ date: Date) -> String {
+        listDateFormatter.string(from: date)
     }
 
     private func dropEnded() {

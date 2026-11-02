@@ -4,7 +4,7 @@
 
 ## v0.1 — First release
 
-`##########` 94% · 16 of 17 done · due 2026-11-20
+`##########` 94% · 17 of 18 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
 
@@ -30,6 +30,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [x] `0056` Names in old ZIPs without the UTF-8 flag show as � <sup>bug · p1 · archive</sup>
 - [x] `0060` Make the repository agent-native <sup>chore · p1 · quality</sup>
 - [x] `0061` License Zipboy under MIT <sup>docs · p1 · distribution</sup>
+- [x] `0076` Polish every surface of the app until nothing looks unconsidered <sup>feature · p2 · shell</sup>
 
 ## v0.2 — Saves in seconds
 

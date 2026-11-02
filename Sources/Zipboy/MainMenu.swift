@@ -119,7 +119,9 @@ enum MainMenu {
         let menu = NSMenu(title: "View")
         menu.addItem(item("Quick Look", #selector(BrowserViewController.toggleQuickLook(_:)), "y", symbol: "eye"))
         menu.addItem(
-            item("Show Preview", #selector(NSSplitViewController.toggleInspector(_:)), "i", [.command, .option]))
+            item(
+                "Show Inspector", #selector(NSSplitViewController.toggleInspector(_:)), "i", [.command, .option],
+                symbol: "sidebar.right"))
         menu.addItem(.separator())
         menu.addItem(
             item("Expand All", #selector(BrowserViewController.expandAll(_:)), "\u{F703}", [.command, .option]))

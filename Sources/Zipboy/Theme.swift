@@ -252,8 +252,8 @@ final class ArchiveRowView: NSTableRowView {
     }
 }
 
-/// The inspector's footer buttons. A view has at most one prominent button, a neon capsule with dark
-/// ink; its alternative is the same shape on a quiet fill, so the pair lines up exactly.
+/// Zipboy's own buttons. A view has at most one prominent button, a neon capsule with dark ink; its
+/// alternative is the same shape on a quiet fill, so the pair lines up exactly.
 final class ActionButton: NSButton {
     let prominent: Bool
 
@@ -272,7 +272,10 @@ final class ActionButton: NSButton {
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
                 .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
         }
+        // An initializer's own assignment skips `didSet`, so it does the same work here.
         label = title
+        setAccessibilityLabel(title)
+        restyle()
     }
 
     required init?(coder: NSCoder) { fatalError("ActionButton is built in code") }
@@ -303,13 +306,36 @@ final class ActionButton: NSButton {
         restyle()
     }
 
+    /// Whether it wears the neon now. Like the system's default button, it goes quiet while its
+    /// window is in the background, so only the window being worked in carries the brand colour.
+    var isLit: Bool { prominent && isEnabled && (window?.isMainWindow ?? true) }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        let center = NotificationCenter.default
+        for name in [NSWindow.didBecomeMainNotification, NSWindow.didResignMainNotification] {
+            center.removeObserver(self, name: name, object: nil)
+            if let newWindow {
+                center.addObserver(self, selector: #selector(mainChanged), name: name, object: newWindow)
+            }
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        restyle()
+    }
+
+    @objc private func mainChanged(_ note: Notification) {
+        restyle()
+    }
+
     private func restyle() {
-        let fill: NSColor =
-            !isEnabled ? Theme.well : prominent ? Theme.neon : Theme.quiet
+        let fill: NSColor = !isEnabled ? Theme.well : isLit ? Theme.neon : Theme.quiet
         // System fills are translucent, so a press scales their own alpha rather than replacing it.
         let resolved = Theme.cgColor(fill, in: self)
         layer?.backgroundColor = isHighlighted ? resolved.copy(alpha: resolved.alpha * 0.7) : resolved
-        let text: NSColor = !isEnabled ? .tertiaryLabelColor : prominent ? Theme.ink : .labelColor
+        let text: NSColor = !isEnabled ? .tertiaryLabelColor : isLit ? Theme.ink : .labelColor
         contentTintColor = text
         attributedTitle = NSAttributedString(
             string: label, attributes: [.font: Theme.Font.button, .foregroundColor: text])

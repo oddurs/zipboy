@@ -12,8 +12,10 @@ final class PreviewViewController: NSViewController {
     private let quickLook = QLPreviewView(frame: .zero, style: .compact)!
     private let picture = NSImageView()
 
-    private let name = NSTextField(wrappingLabelWithString: "")
-    private let subtitle = NSTextField(labelWithString: "")
+    /// The heading: what it is, then the one fact that sets it apart. The table holds the rest, so
+    /// nothing is said twice.
+    let name = NSTextField(wrappingLabelWithString: "")
+    let subtitle = NSTextField(labelWithString: "")
     private let badges = NSStackView()
     let table = InfoTable()
 
@@ -170,7 +172,7 @@ final class PreviewViewController: NSViewController {
             picture(NSWorkspace.shared.icon(forFile: node.url.path))
         }
         name.stringValue = node.name
-        subtitle.stringValue = "\(node.kind) · \(formatSize(node.size))"
+        subtitle.stringValue = node.kind
         setBadges([])
 
         let catalogCRC = archive.verbatimEntry(forPath: node.path).map { String(format: "%08X", $0.crc32) }
@@ -213,12 +215,12 @@ final class PreviewViewController: NSViewController {
         let count = tree?.descendantCount ?? 0
         let unpacked = tree?.size ?? 0
         name.stringValue = archive.displayName
-        subtitle.stringValue = count == 0 ? "Empty archive" : "\(Self.items(count)) · \(formatSize(unpacked))"
+        // The title bar already counts the items; the heading says what kind of archive it is.
+        let format = archive.importedFrom?.format ?? "ZIP"
+        subtitle.stringValue = count == 0 ? "Empty \(format) archive" : "\(format) archive"
         var marks: [(String, String)] = []
         if archive.password != nil { marks.append(("lock.fill", "Encrypted")) }
-        if let imported = archive.importedFrom {
-            marks.append(("arrow.triangle.2.circlepath", "\(imported.format) · saves as ZIP"))
-        }
+        if archive.importedFrom != nil { marks.append(("arrow.triangle.2.circlepath", "Saves as ZIP")) }
         setBadges(marks)
 
         let onDisk = archive.source.flatMap(Self.fileBytes)
@@ -235,8 +237,6 @@ final class PreviewViewController: NSViewController {
             ("Contains", Self.breakdown(of: tree)),
             ("Unpacked", formatSize(unpacked)),
             onDisk.map { ("Compressed", Self.compressed($0, from: unpacked)) },
-            // An imported archive's badge already names its format.
-            archive.importedFrom == nil ? ("Format", "ZIP") : nil,
             modified.map { ("Modified", Self.date($0)) },
         ])
 
@@ -252,12 +252,13 @@ final class PreviewViewController: NSViewController {
         picture(Self.fan(nodes.prefix(3).map { NSWorkspace.shared.icon(forFile: $0.url.path) }))
         let total = nodes.reduce(Int64(0)) { $0 + $1.size }
         let folders = nodes.filter(\.isDirectory).count
-        name.stringValue = "\(nodes.count.formatted()) Items"
-        subtitle.stringValue = formatSize(total)
+        let parents = Set(nodes.map { ($0.path as NSString).deletingLastPathComponent })
+        name.stringValue = Self.items(nodes.count)
+        subtitle.stringValue = Self.counts(files: nodes.count - folders, folders: folders)
         setBadges([])
         table.show([
-            ("Contains", Self.counts(files: nodes.count - folders, folders: folders)),
             ("Size", formatSize(total)),
+            parents.count == 1 ? parents.first.map { ("Where", $0.isEmpty ? "Top level" : $0) } : nil,
         ])
         actions(
             secondary: ("Quick Look", #selector(BrowserViewController.toggleQuickLook(_:))),
