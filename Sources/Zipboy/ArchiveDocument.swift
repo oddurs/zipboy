@@ -565,12 +565,15 @@ final class ArchiveDocument: NSDocument {
     func beginTask(_ title: String, total: Int64) -> LongTask {
         let task = LongTask(title: title, total: total)
         tasks.append(task)
+        TaskWatcher.shared.began(task)
         report(title)
         return task
     }
 
     func endTask(_ task: LongTask) {
+        guard tasks.contains(where: { $0 === task }) else { return }
         tasks.removeAll { $0 === task }
+        TaskWatcher.shared.ended(task, in: self)
         report(tasks.last?.title)
     }
 
