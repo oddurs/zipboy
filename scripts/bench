@@ -1,21 +1,11 @@
 #!/bin/sh
 set -eu
 
-# Performance benchmark suite with budgets for ZipCatalog, ZipWriter delta save, and Archive.extract.
-# Exits non-zero if any measurement exceeds its budget by more than 20%.
+# The performance budgets: each measurement printed beside its budget, in a release build.
+# Exits non-zero if any is more than 20% over. Kept out of the test suite, where a busy machine
+# failed them for reasons that weren't bugs.
 
 cd "$(dirname "$0")/.."
 
-dev="$(xcode-select -p)"
-flags=""
-case "$dev" in
-*/CommandLineTools)
-    fw="$dev/Library/Developer/Frameworks"
-    lib="$dev/Library/Developer/usr/lib"
-    flags="-Xswiftc -F -Xswiftc $fw -Xlinker -F -Xlinker $fw -Xlinker -rpath -Xlinker $fw -Xlinker -rpath -Xlinker $lib"
-    ;;
-esac
-
-echo "==> running performance budget suite"
-# shellcheck disable=SC2086
-swift test $flags --filter BenchmarkBudgetTests
+echo "==> measuring against the budgets, in a release build"
+swift run -c release ZipboyBench

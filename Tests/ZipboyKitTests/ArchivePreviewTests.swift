@@ -57,17 +57,15 @@ struct ArchivePreviewTests {
         #expect(html.contains("a&amp;b.zip"))
     }
 
-    @Test func tenThousandEntriesRenderQuickly() throws {
+    /// How fast this is lives in scripts/bench; here, only that a big archive comes out whole.
+    @Test func tenThousandEntriesAllAppear() throws {
         let entries = (0..<10_000).map {
             ArchiveListing.Entry(
                 path: "Folder \($0 % 50)/file \($0).txt", size: 1000, isDirectory: false, modified: nil)
         }
         let listing = ArchiveListing(
             format: "ZIP", entries: entries, isTruncated: false, isEncrypted: false, namesHidden: false)
-        let started = Date()
         let html = ArchivePreview.html(for: listing, name: "big.zip", fileSize: 1)
-        // Generous, to stay clear of a busy CI machine; the measured time goes in the PR.
-        #expect(Date().timeIntervalSince(started) < 2)
         #expect(html.contains("10,050 items"))
     }
 }

@@ -744,52 +744,6 @@ import zlib
     }
 }
 
-@Suite struct BenchmarkBudgetTests {
-    @Test func meetsCatalogDeltaSaveAndChecksumBudgets() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "ZipboyBench-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let src = dir.appendingPathComponent("src")
-        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
-        let bigPayload = Data((0..<(8 << 20)).map { UInt8(($0 * 131) & 0xff) })
-        try bigPayload.write(to: src.appendingPathComponent("large.bin"))
-        for i in 0..<200 {
-            try Data("entry-\(i)".utf8).write(to: src.appendingPathComponent("file-\(i).txt"))
-        }
-
-        let zip = dir.appendingPathComponent("bench.zip")
-        try Archive.writeZip(from: src, to: zip, compressionLevel: .fast)
-
-        // 1. Catalog read budget: <= 250 ms (with 20% tolerance = 300 ms)
-        let t0 = ContinuousClock.now
-        let catalog = try ZipCatalog.read(from: zip)
-        let catalogMs = t0.duration(to: .now) / .milliseconds(1)
-        #expect(catalog.entries.count == 201)
-        #expect(catalogMs <= 300.0, "Catalog read took \(catalogMs) ms (budget 250 ms)")
-
-        // 2. Delta save (verbatim copy of 8 MB + 199 files, 1 modified file): <= 500 ms (with 20% = 600 ms)
-        let editedURL = dir.appendingPathComponent("edited.txt")
-        try Data("updated-entry".utf8).write(to: editedURL)
-        let deltaItems: [ZipWriter.Item] =
-            catalog.entries.filter { $0.path != "file-0.txt" }.map { .verbatim($0, newPath: nil) }
-            + [.workspace(url: editedURL, path: "file-0.txt")]
-        let outZip = dir.appendingPathComponent("delta.zip")
-        let t1 = ContinuousClock.now
-        try ZipWriter.write(items: deltaItems, sourceZip: zip, to: outZip, compressionLevel: .balanced)
-        let deltaMs = t1.duration(to: .now) / .milliseconds(1)
-        #expect(deltaMs <= 600.0, "Delta save took \(deltaMs) ms (budget 500 ms)")
-
-        // 3. Streaming CRC-32 + SHA-256 of 8 MB payload: <= 300 ms (with 20% = 360 ms)
-        let t2 = ContinuousClock.now
-        let digest = try Checksums.compute(for: src.appendingPathComponent("large.bin"))
-        let checksumMs = t2.duration(to: .now) / .milliseconds(1)
-        #expect(!digest.sha256Hex.isEmpty)
-        #expect(checksumMs <= 360.0, "Checksum took \(checksumMs) ms (budget 300 ms)")
-    }
-}
-
 @Suite struct NodeTests {
     @Test func scansSortsAndFilters() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ZipboyNode-\(UUID().uuidString)")

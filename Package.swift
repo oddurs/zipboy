@@ -36,6 +36,8 @@ let package = Package(
                 .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain", "-Xlinker", "-application_extension"]),
             ]
         ),
+        // Timing budgets, run by scripts/bench in a release build rather than in the test suite.
+        .executableTarget(name: "ZipboyBench", dependencies: ["ZipboyKit"]),
         .testTarget(name: "ZipboyKitTests", dependencies: ["ZipboyKit"], resources: [.copy("Fixtures")]),
         .testTarget(name: "ZipboyTests", dependencies: ["Zipboy"]),
     ]
