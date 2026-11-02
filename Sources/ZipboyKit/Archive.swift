@@ -21,12 +21,23 @@ public enum ArchiveError: LocalizedError, Equatable {
         public let title: String
         public let message: String
         public let technicalDetails: String?
+        /// The next step the alert can take for the person, as a button.
+        public let recovery: Recovery?
 
-        public init(title: String, message: String, technicalDetails: String? = nil) {
+        public init(title: String, message: String, technicalDetails: String? = nil, recovery: Recovery? = nil) {
             self.title = title
             self.message = message
             self.technicalDetails = technicalDetails
+            self.recovery = recovery
         }
+    }
+
+    /// What an error's alert can do about it.
+    public enum Recovery: Equatable, Sendable {
+        /// Save a copy somewhere writable: File > Duplicate.
+        case duplicate
+        /// Open System Settings > General > Storage, to free space.
+        case freeSpace
     }
 
     public var errorDescription: String? {
@@ -73,7 +84,8 @@ public enum ArchiveError: LocalizedError, Equatable {
                 return UserExplanation(
                     title: "There isn’t enough free space on the disk.",
                     message:
-                        "Working with \(label) needs at least \(size(needed)), and only \(size(available)) is available. Free up disk space and try again."
+                        "Working with \(label) needs at least \(size(needed)), and only \(size(available)) is available. Free up disk space and try again.",
+                    recovery: .freeSpace
                 )
             case .suspiciousArchive(let reason):
                 return UserExplanation(
@@ -101,14 +113,13 @@ public enum ArchiveError: LocalizedError, Equatable {
                 return UserExplanation(
                     title: "There isn’t enough free space on the disk.",
                     message: "Free up disk space and try saving \(label) again.",
-                    technicalDetails: nsError.localizedDescription
+                    technicalDetails: nsError.localizedDescription, recovery: .freeSpace
                 )
             case .fileWriteNoPermission, .fileWriteVolumeReadOnly:
                 return UserExplanation(
                     title: "Zipboy doesn’t have permission to save \(label) here.",
-                    message:
-                        "The file or folder may be locked or read-only. Choose File > Duplicate to save a copy in another folder.",
-                    technicalDetails: nsError.localizedDescription
+                    message: "The file or folder may be locked or read-only. Save a copy in another folder instead.",
+                    technicalDetails: nsError.localizedDescription, recovery: .duplicate
                 )
             case .fileReadNoPermission:
                 return UserExplanation(
@@ -125,15 +136,14 @@ public enum ArchiveError: LocalizedError, Equatable {
             case EACCES, EPERM, EROFS:
                 return UserExplanation(
                     title: "Zipboy doesn’t have permission to modify \(label).",
-                    message:
-                        "The file or folder is read-only. Choose File > Duplicate to save a copy in another folder.",
-                    technicalDetails: nsError.localizedDescription
+                    message: "The file or folder is read-only. Save a copy in another folder instead.",
+                    technicalDetails: nsError.localizedDescription, recovery: .duplicate
                 )
             case ENOSPC:
                 return UserExplanation(
                     title: "There isn’t enough free space on the disk.",
-                    message: "Free up disk space and try again.",
-                    technicalDetails: nsError.localizedDescription
+                    message: "Free up disk space and try \(label) again.",
+                    technicalDetails: nsError.localizedDescription, recovery: .freeSpace
                 )
             default:
                 break
@@ -160,23 +170,27 @@ public enum ArchiveError: LocalizedError, Equatable {
             return UserExplanation(
                 title: "Zipboy doesn’t have permission to \(writing ? "save" : "access") \(label).",
                 message: writing
-                    ? "Choose File > Duplicate to save a copy in a folder you can write to."
+                    ? "Save a copy in a folder you can write to instead."
                     : "Check the file’s permissions in Finder’s Get Info window and try again.",
-                technicalDetails: raw
+                technicalDetails: raw, recovery: writing ? .duplicate : nil
             )
         }
         if lower.contains("no space left") || lower.contains("out of space") || lower.contains("disk full") {
             return UserExplanation(
                 title: "There isn’t enough free space on the disk.",
-                message: "Free up some disk space and try again.",
-                technicalDetails: raw
+                message: "Free up some disk space and try \(label) again.",
+                technicalDetails: raw, recovery: .freeSpace
             )
         }
         if lower.contains("unsupported") || lower.contains("compression method") {
+            // libarchive names the method in brackets, as in "compression method (14: lzma)".
+            let method = raw.firstMatch(of: /\((?:\d+: )?([^)]+)\)/).map { String($0.1) }
             return UserExplanation(
                 title: "\(label) uses an unsupported archive feature.",
-                message:
-                    "This archive was created with a compression method or variant that Zipboy doesn’t support yet.",
+                message: method.map {
+                    "It was made with the “\($0)” compression method, which Zipboy can’t read yet. Ask for it in another format, such as a standard ZIP."
+                }
+                    ?? "It was made with a compression method or variant Zipboy can’t read yet. Ask for it in another format, such as a standard ZIP.",
                 technicalDetails: raw
             )
         }

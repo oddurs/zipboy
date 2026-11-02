@@ -995,14 +995,22 @@ final class ArchiveDocument: NSDocument {
             return error
         }
         let explanation = ArchiveError.describe(error, fileName: source?.lastPathComponent ?? displayName)
-        return NSError(
-            domain: nsError.domain,
-            code: nsError.code,
-            userInfo: [
-                NSLocalizedDescriptionKey: explanation.title,
-                NSLocalizedRecoverySuggestionErrorKey: explanation.message,
-            ]
-        )
+        var info: [String: Any] = [
+            NSLocalizedDescriptionKey: explanation.title,
+            NSLocalizedRecoverySuggestionErrorKey: explanation.message,
+        ]
+        // The next step as a button, not an instruction to go and find it in a menu.
+        if let recovery = explanation.recovery {
+            let attempter = ErrorRecovery(recovery) { [weak self] in
+                switch recovery {
+                case .duplicate: self?.duplicate(nil)
+                case .freeSpace: NSWorkspace.shared.open(ErrorRecovery.storageSettings)
+                }
+            }
+            info[NSLocalizedRecoveryOptionsErrorKey] = [attempter.title, "Cancel"]
+            info[NSRecoveryAttempterErrorKey] = attempter
+        }
+        return NSError(domain: nsError.domain, code: nsError.code, userInfo: info)
     }
 
     func remove(_ paths: [String]) throws {
@@ -1084,6 +1092,43 @@ final class LongTask: Sendable {
         self.title = title
         self.started = started
         progress = Progress(totalUnitCount: max(total, 1))
+    }
+}
+
+/// Carries out an error alert's first button, the recovery; the second is Cancel. AppKit calls one
+/// method or the other depending on whether the alert is a sheet.
+final class ErrorRecovery: NSObject {
+    static let storageSettings = URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!
+
+    let title: String
+    private let perform: () -> Void
+
+    init(_ recovery: ArchiveError.Recovery, perform: @escaping () -> Void) {
+        title =
+            switch recovery {
+            case .duplicate: "Duplicate…"
+            case .freeSpace: "Open Storage Settings"
+            }
+        self.perform = perform
+    }
+
+    override func attemptRecovery(fromError error: Error, optionIndex recoveryOptionIndex: Int) -> Bool {
+        guard recoveryOptionIndex == 0 else { return false }
+        perform()
+        return true
+    }
+
+    override func attemptRecovery(
+        fromError error: Error, optionIndex recoveryOptionIndex: Int, delegate: Any?,
+        didRecoverSelector: Selector?, contextInfo: UnsafeMutableRawPointer?
+    ) {
+        let recovered = attemptRecovery(fromError: error, optionIndex: recoveryOptionIndex)
+        if let delegate = delegate as? NSObject, let didRecoverSelector {
+            // The selector's signature is (didRecover: Bool, contextInfo: void *); AppKit expects it called.
+            typealias Callback = @convention(c) (AnyObject, Selector, Bool, UnsafeMutableRawPointer?) -> Void
+            let call = unsafeBitCast(delegate.method(for: didRecoverSelector), to: Callback.self)
+            call(delegate, didRecoverSelector, recovered, contextInfo)
+        }
     }
 }
 
