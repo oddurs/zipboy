@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import zlib
 
 @testable import ZipboyKit
 
@@ -473,6 +474,95 @@ import Testing
         #expect(try Data(contentsOf: extracted.appendingPathComponent("sub/newname.txt")) == payloadB)
         #expect(try read("edit.txt", in: extracted) == "brand-new-content")
         #expect(try read("folder/added.txt", in: extracted) == "added-later")
+    }
+
+    /// One stored entry whose raw name is `ete.txt` while its 0x7075 Unicode Path field names it
+    /// `été.txt`, with an extended timestamp and a uid/gid field beside it, as Info-ZIP writes them.
+    func unicodePathZip() throws -> (url: URL, timestamp: Data, owner: Data) {
+        func le16(_ v: Int) -> Data { Data([UInt8(v & 0xff), UInt8(v >> 8 & 0xff)]) }
+        func le32(_ v: UInt32) -> Data { Data((0..<4).map { UInt8(v >> ($0 * 8) & 0xff) }) }
+        func crc32(_ data: Data) -> UInt32 {
+            UInt32(data.withUnsafeBytes { zlib.crc32(0, $0.bindMemory(to: Bytef.self).baseAddress, uInt($0.count)) })
+        }
+        let raw = Data("ete.txt".utf8)
+        let unicode = Data("été.txt".utf8)
+        let body = Data("data".utf8)
+        let timestamp = le16(0x5455) + le16(5) + Data([0x01]) + le32(1_700_000_000)
+        let owner = le16(0x7875) + le16(11) + Data([1, 4]) + le32(501) + Data([4]) + le32(20)
+        let unicodePath = le16(0x7075) + le16(5 + unicode.count) + Data([1]) + le32(crc32(raw)) + unicode
+        let extra = unicodePath + timestamp + owner
+        let crc = crc32(body)
+
+        var local = le32(0x0403_4b50) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0x21)
+        local += le32(crc) + le32(UInt32(body.count)) + le32(UInt32(body.count))
+        local += le16(raw.count) + le16(extra.count) + raw + extra + body
+        var central = le32(0x0201_4b50) + le16(0x031E) + le16(20) + le16(0) + le16(0) + le16(0) + le16(0x21)
+        central += le32(crc) + le32(UInt32(body.count)) + le32(UInt32(body.count))
+        central += le16(raw.count) + le16(extra.count) + le16(0) + le16(0) + le16(0) + le32(0o100644 << 16) + le32(0)
+        central += raw + extra
+        let end =
+            le32(0x0605_4b50) + le16(0) + le16(0) + le16(1) + le16(1) + le32(UInt32(central.count))
+            + le32(UInt32(local.count)) + le16(0)
+
+        let url = dir.appendingPathComponent("unicode-path.zip")
+        try (local + central + end).write(to: url)
+        return (url, timestamp, owner)
+    }
+
+    /// The extra field of the local header at the start of `zip`.
+    func firstLocalExtra(in zip: URL) throws -> Data {
+        let bytes = try Data(contentsOf: zip)
+        let nameLength = Int(bytes[26]) | Int(bytes[27]) << 8
+        let extraLength = Int(bytes[28]) | Int(bytes[29]) << 8
+        return bytes.subdata(in: (30 + nameLength)..<(30 + nameLength + extraLength))
+    }
+
+    @Test func deltaSavesKeepExtraFields() throws {
+        let (source, timestamp, owner) = try unicodePathZip()
+        let entry = try #require(try ZipCatalog.read(from: source).entries.first)
+        #expect(entry.path == "été.txt")
+
+        let copied = dir.appendingPathComponent("copied.zip")
+        try ZipWriter.write(items: [.verbatim(entry)], sourceZip: source, to: copied)
+        let copy = try #require(try ZipCatalog.read(from: copied).entries.first)
+        #expect(copy.path == "été.txt")
+        #expect(copy.extraField == entry.extraField)
+
+        // The 0x7075 field names the old path, and would override the new one in readers that honour it.
+        let renamed = dir.appendingPathComponent("renamed.zip")
+        try ZipWriter.write(items: [.verbatim(entry, newPath: "après.txt")], sourceZip: source, to: renamed)
+        let moved = try #require(try ZipCatalog.read(from: renamed).entries.first)
+        #expect(moved.path == "après.txt")
+        #expect(moved.extraField == timestamp + owner)
+        #expect(try firstLocalExtra(in: renamed) == timestamp + owner)
+
+        let (status, out) = try run("/usr/bin/unzip", ["-t", renamed.path])
+        #expect(status == 0, "\(out)")
+    }
+
+    @Test func rewrittenHeadersRebuildZip64BesideCarriedFields() throws {
+        let staleZip64 = Data([0x01, 0x00, 0x08, 0x00]) + Data(repeating: 0xAA, count: 8)
+        let unicodePath = Data([0x75, 0x70, 0x06, 0x00, 0x01, 0, 0, 0, 0, 0x61])
+        let timestamp = Data([0x55, 0x54, 0x05, 0x00, 0x01, 0x00, 0xF1, 0x53, 0x65])
+        let truncated = Data([0x75, 0x78, 0x40, 0x00, 0x01])
+        let source = staleZip64 + unicodePath + timestamp + truncated
+        #expect(ZipWriter.carriedExtra(source, renamed: false) == unicodePath + timestamp)
+        #expect(ZipWriter.carriedExtra(source, renamed: true) == timestamp)
+
+        let offset: UInt64 = 5 << 30
+        let header = ZipWriter.centralHeader(
+            ZipWriter.CentralRecord(
+                versionMadeBy: 0x031E, versionNeeded: 20, flags: 0, method: 0, dosTime: 0, dosDate: 0,
+                crc32: 0, compressedSize: 4, uncompressedSize: 4, localHeaderOffset: offset,
+                internalAttributes: 0, externalAttributes: 0, nameBytes: Data("a".utf8), extra: timestamp,
+                comment: Data()))
+        func u16(_ at: Int) -> Int { Int(header[at]) | Int(header[at + 1]) << 8 }
+        #expect(u16(6) == 45)
+        #expect(header.subdata(in: 42..<46) == Data(repeating: 0xFF, count: 4))
+        #expect(u16(30) == 12 + timestamp.count)
+        var zip64 = Data([0x01, 0x00, 0x08, 0x00])
+        zip64.append(contentsOf: (0..<8).map { UInt8(offset >> ($0 * 8) & 0xff) })
+        #expect(header.subdata(in: 47..<(47 + 12 + timestamp.count)) == zip64 + timestamp)
     }
 
     @Test func computesCRC32AndSHA256Checksums() throws {

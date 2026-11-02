@@ -12,7 +12,7 @@ public enum ZipWriter {
         case workspace(url: URL, path: String)
     }
 
-    private struct CentralRecord {
+    struct CentralRecord {
         let versionMadeBy: UInt16
         let versionNeeded: UInt16
         let flags: UInt16
@@ -26,6 +26,8 @@ public enum ZipWriter {
         let internalAttributes: UInt16
         let externalAttributes: UInt32
         let nameBytes: Data
+        /// Extra fields other than Zip64, which `centralHeader` rebuilds for the entry's new offset.
+        let extra: Data
         let comment: Data
     }
 
@@ -115,7 +117,7 @@ public enum ZipWriter {
         cdBuffer.reserveCapacity(centralRecords.count * 64)
 
         for rec in centralRecords {
-            appendCentralHeader(rec, into: &cdBuffer)
+            cdBuffer.append(centralHeader(rec))
             if cdBuffer.count >= chunkSize {
                 try out.write(contentsOf: cdBuffer)
                 cdBuffer.removeAll(keepingCapacity: true)
@@ -231,6 +233,7 @@ public enum ZipWriter {
                 internalAttributes: entry.internalAttributes,
                 externalAttributes: entry.externalAttributes,
                 nameBytes: effectiveNameBytes,
+                extra: carriedExtra(entry.extraField, renamed: false),
                 comment: entry.comment
             )
         }
@@ -240,13 +243,19 @@ public enum ZipWriter {
         let cleanFlags = effectiveFlags & ~UInt16(0x0008)
         let needsZ64 = entry.compressedSize >= 0xFFFF_FFFF || entry.uncompressedSize >= 0xFFFF_FFFF
         let versionNeeded = max(entry.versionNeeded, needsZ64 ? UInt16(45) : UInt16(20))
-        var localExtra = Data()
+        let renamed = newPath != nil
+        var localZip64 = Data()
         if needsZ64 {
-            appendU16(0x0001, to: &localExtra)
-            appendU16(16, to: &localExtra)
-            appendU64(entry.uncompressedSize, to: &localExtra)
-            appendU64(entry.compressedSize, to: &localExtra)
+            appendU16(0x0001, to: &localZip64)
+            appendU16(16, to: &localZip64)
+            appendU64(entry.uncompressedSize, to: &localZip64)
+            appendU64(entry.compressedSize, to: &localZip64)
         }
+        try sourceHandle.seek(toOffset: entry.localHeaderOffset)
+        let sourceLocal = try sourceHandle.read(upToCount: Int(payloadOffset - entry.localHeaderOffset)) ?? Data()
+        let sourceNameLength = sourceLocal.count >= 30 ? Int(sourceLocal[26]) | Int(sourceLocal[27]) << 8 : 0
+        let sourceLocalExtra = sourceLocal.dropFirst(min(sourceLocal.count, 30 + sourceNameLength))
+        let localExtra = joined(localZip64, carriedExtra(Data(sourceLocalExtra), renamed: renamed))
 
         var header = Data()
         header.reserveCapacity(30 + effectiveNameBytes.count + localExtra.count)
@@ -288,8 +297,35 @@ public enum ZipWriter {
             internalAttributes: entry.internalAttributes,
             externalAttributes: entry.externalAttributes,
             nameBytes: effectiveNameBytes,
+            extra: carriedExtra(entry.extraField, renamed: renamed),
             comment: entry.comment
         )
+    }
+
+    /// The extra fields of `extra` worth carrying to a rewritten header. Zip64 goes, since the writer
+    /// rebuilds it for the entry's new sizes and offset. A renamed entry's 0x7075 Unicode Path goes
+    /// too: it names the old path, and readers that honour it would show that instead of the new one.
+    /// A malformed tail is dropped rather than copied into a header that would then be malformed.
+    static func carriedExtra(_ extra: Data, renamed: Bool) -> Data {
+        var carried = Data()
+        var cursor = extra.startIndex
+        while cursor + 4 <= extra.endIndex {
+            let tag = UInt16(extra[cursor]) | UInt16(extra[cursor + 1]) << 8
+            let size = Int(extra[cursor + 2]) | Int(extra[cursor + 3]) << 8
+            let end = cursor + 4 + size
+            guard end <= extra.endIndex else { break }
+            if tag != 0x0001 && !(renamed && tag == 0x7075) {
+                carried.append(extra[cursor..<end])
+            }
+            cursor = end
+        }
+        return carried
+    }
+
+    /// The length is 16 bits. Should the carried fields no longer fit beside Zip64, Zip64 wins: without
+    /// it the entry can't be found at all.
+    private static func joined(_ zip64: Data, _ carried: Data) -> Data {
+        zip64.count + carried.count <= 0xFFFF ? zip64 + carried : zip64
     }
 
     private static func writeWorkspaceItem(
@@ -356,6 +392,7 @@ public enum ZipWriter {
                 internalAttributes: 0,
                 externalAttributes: externalAttr,
                 nameBytes: nameBytes,
+                extra: Data(),
                 comment: Data()
             )
         }
@@ -395,6 +432,7 @@ public enum ZipWriter {
                 internalAttributes: 0,
                 externalAttributes: externalAttr,
                 nameBytes: nameBytes,
+                extra: Data(),
                 comment: Data()
             )
         }
@@ -545,6 +583,7 @@ public enum ZipWriter {
             internalAttributes: 0,
             externalAttributes: externalAttr,
             nameBytes: nameBytes,
+            extra: Data(),
             comment: Data()
         )
     }
@@ -576,22 +615,25 @@ public enum ZipWriter {
         }
     }
 
-    private static func appendCentralHeader(_ rec: CentralRecord, into buffer: inout Data) {
+    static func centralHeader(_ rec: CentralRecord) -> Data {
         let needsUncomp64 = rec.uncompressedSize >= 0xFFFF_FFFF
         let needsComp64 = rec.compressedSize >= 0xFFFF_FFFF
         let needsOffset64 = rec.localHeaderOffset >= 0xFFFF_FFFF
-        var extra = Data()
+        var zip64 = Data()
         if needsUncomp64 || needsComp64 || needsOffset64 {
             var z64Payload = Data()
             if needsUncomp64 { appendU64(rec.uncompressedSize, to: &z64Payload) }
             if needsComp64 { appendU64(rec.compressedSize, to: &z64Payload) }
             if needsOffset64 { appendU64(rec.localHeaderOffset, to: &z64Payload) }
-            appendU16(0x0001, to: &extra)
-            appendU16(UInt16(z64Payload.count), to: &extra)
-            extra.append(z64Payload)
+            appendU16(0x0001, to: &zip64)
+            appendU16(UInt16(z64Payload.count), to: &zip64)
+            zip64.append(z64Payload)
         }
-        let versionNeeded = max(rec.versionNeeded, extra.isEmpty ? UInt16(20) : UInt16(45))
+        let versionNeeded = max(rec.versionNeeded, zip64.isEmpty ? UInt16(20) : UInt16(45))
+        let extra = joined(zip64, rec.extra)
 
+        var buffer = Data()
+        buffer.reserveCapacity(46 + rec.nameBytes.count + extra.count + rec.comment.count)
         appendU32(0x0201_4b50, to: &buffer)
         appendU16(rec.versionMadeBy, to: &buffer)
         appendU16(versionNeeded, to: &buffer)
@@ -612,6 +654,7 @@ public enum ZipWriter {
         buffer.append(rec.nameBytes)
         buffer.append(extra)
         buffer.append(rec.comment)
+        return buffer
     }
 
     private static func computeCRC32(_ data: Data) -> UInt32 {
