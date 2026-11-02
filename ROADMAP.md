@@ -107,11 +107,11 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [ ] `0035` VoiceOver and full keyboard access across every flow <sup>feature · p0 · quality</sup>
 - [ ] `0036` Open an archive inside an archive in its own window <sup>feature · p2 · document</sup>
 - [ ] `0038` Offer once to open ZIPs with Zipboy <sup>feature · p2 · system</sup>
-- [ ] `0085` Archives Zipboy owns show a Zipboy document icon <sup>feature · p3 · distribution</sup>
 
 ### planned
 
 - [ ] `0083` Zipboy can be scripted with AppleScript and Shortcuts <sup>feature · p2 · system</sup>
+- [ ] `0085` Archives Zipboy owns show a Zipboy document icon <sup>feature · p3 · distribution</sup>
 
 ### done
 
