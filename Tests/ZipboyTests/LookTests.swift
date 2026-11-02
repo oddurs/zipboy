@@ -100,5 +100,77 @@ import ZipboyKit
         #expect(appItems.contains { $0.title == "Settings…" && $0.keyEquivalent == "," })
         let viewItems = menu.item(withTitle: "View")?.submenu?.items ?? []
         #expect(viewItems.contains { $0.title == "Show Hidden Files" && $0.keyEquivalent == "." })
+        let helpItems = menu.item(withTitle: "Help")?.submenu?.items ?? []
+        #expect(helpItems.contains { $0.title == "Zipboy Help" && $0.keyEquivalent == "?" })
+
+        // Third-launch default handler offer triggers exactly once on launch 3.
+        #expect(!settings.recordLaunchAndShouldOfferDefaultHandler())
+        #expect(!settings.recordLaunchAndShouldOfferDefaultHandler())
+        #expect(settings.recordLaunchAndShouldOfferDefaultHandler())
+        #expect(!settings.recordLaunchAndShouldOfferDefaultHandler())
+    }
+
+    @Test func helpWindowFiltersTopicsAndFindsPasswordSection() {
+        let help = HelpWindowController.shared
+        help.filter("")
+        #expect(help.visibleSections.count == HelpWindowController.allSections.count)
+
+        help.filter("password")
+        #expect(help.visibleSections.count == 1)
+        #expect(help.visibleSections.first?.title == "Passwords & AES-256 Encryption")
+
+        help.filter("verify")
+        #expect(help.visibleSections.first?.title == "Integrity Verification & Checksums")
+
+        help.filter("")
+        #expect(help.visibleSections.count == HelpWindowController.allSections.count)
+    }
+
+    @Test func keychainStoresRetrievesAndDeletesPasswords() throws {
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "keychain-test-\(UUID().uuidString).zip")
+        try Data("zip".utf8).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        let service = "com.oddurs.zipboy.tests.\(UUID().uuidString)"
+        defer { Keychain.deletePassword(for: tempFile, service: service) }
+
+        #expect(Keychain.password(for: tempFile, service: service) == nil)
+        #expect(Keychain.setPassword("s3cr3t!", for: tempFile, service: service))
+        #expect(Keychain.password(for: tempFile, service: service) == "s3cr3t!")
+
+        Keychain.deletePassword(for: tempFile, service: service)
+        #expect(Keychain.password(for: tempFile, service: service) == nil)
+    }
+
+    @Test func springLoadingExpandsCollapsedFolderAfterHover() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "spring-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("FolderA/Sub"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: dir.appendingPathComponent("FolderA/Sub/a.txt"))
+        try Data("y".utf8).write(to: dir.appendingPathComponent("top.txt"))
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        try await doc.add(
+            [dir.appendingPathComponent("FolderA"), dir.appendingPathComponent("top.txt")],
+            into: ""
+        ) { _ in .keepBoth }
+
+        let browser = BrowserViewController()
+        browser.document = doc
+        browser.springLoadDelay = 0.05
+        browser.reload()
+
+        let folderNode = try #require(browser.outline.item(atRow: 0) as? Node)
+        #expect(folderNode.path == "FolderA")
+        #expect(!browser.outline.isItemExpanded(folderNode))
+
+        browser.scheduleSpringLoad(for: folderNode)
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(browser.outline.isItemExpanded(folderNode))
     }
 }

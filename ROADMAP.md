@@ -73,7 +73,7 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 
 ## v0.4 — Part of the Mac
 
-`··········` 0% · 0 of 10 done · due 2027-03-12
+`#·········` 9% · 1 of 11 done · due 2027-03-12
 
 Zipboy works from the Finder as well as in its own window: Quick Look shows what's in an archive, Quick Actions compress and extract, updates arrive by themselves, and every flow works with VoiceOver and the keyboard alone.
 
@@ -89,6 +89,10 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [ ] `0037` Spring-loaded folders and a drop target on the empty window <sup>feature · p2 · browser</sup>
 - [ ] `0038` Offer once to open ZIPs with Zipboy <sup>feature · p2 · system</sup>
 - [ ] `0039` Remember an archive's password in the Keychain, if asked <sup>feature · p3 · document</sup>
+
+### done
+
+- [x] `0066` Readable errors, hostile archive guards, Keychain passwords, spring-loaded folders, version stamping, and Help guide <sup>feature · p0 · archive</sup>
 
 ## v1.0 — The promise
 

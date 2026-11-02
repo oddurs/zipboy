@@ -41,6 +41,8 @@ public final class Settings: @unchecked Sendable {
         static let wrapExtractedFiles = "wrapExtractedFiles"
         static let revealExtractedInFinder = "revealExtractedInFinder"
         static let compressionLevel = "compressionLevel"
+        static let launchCount = "launchCount"
+        static let hasOfferedDefaultZipHandler = "hasOfferedDefaultZipHandler"
 
         static let all = [
             launchBehavior,
@@ -155,6 +157,24 @@ public final class Settings: @unchecked Sendable {
             defaults.set(newValue.rawValue, forKey: Key.compressionLevel)
             notify()
         }
+    }
+
+    public var launchCount: Int {
+        get { defaults.integer(forKey: Key.launchCount) }
+        set { defaults.set(newValue, forKey: Key.launchCount) }
+    }
+
+    public var hasOfferedDefaultZipHandler: Bool {
+        get { defaults.bool(forKey: Key.hasOfferedDefaultZipHandler) }
+        set { defaults.set(newValue, forKey: Key.hasOfferedDefaultZipHandler) }
+    }
+
+    /// Increments the launch count and returns `true` at most once per account (on the third launch).
+    public func recordLaunchAndShouldOfferDefaultHandler() -> Bool {
+        launchCount += 1
+        guard launchCount >= 3, !hasOfferedDefaultZipHandler else { return false }
+        hasOfferedDefaultZipHandler = true
+        return true
     }
 
     /// Restores every setting to its sensible default and notifies observers.
