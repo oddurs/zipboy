@@ -35,7 +35,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ## v0.2 — Saves in seconds
 
-`######····` 52% · 12 of 23 done · due 2026-12-18
+`#####·····` 48% · 12 of 25 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
@@ -52,6 +52,8 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [ ] `0073` Stop offering to open zstd and lz4 files we can't read <sup>bug · p2 · distribution</sup>
 - [ ] `0074` Move timing budgets out of the unit suite <sup>chore · p2 · quality</sup>
 - [ ] `0075` Count hard links against the bomb guard <sup>bug · p1 · archive</sup>
+- [ ] `0086` About Zipboy credits libarchive and links the project <sup>docs · p3 · shell</sup>
+- [ ] `0087` Every sheet and prompt cancels with Escape and Command-period <sup>bug · p2 · shell</sup>
 
 ### done
 
@@ -70,7 +72,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 
 ## v0.3 — Opens instantly
 
-`··········` 0% · 0 of 5 done · due 2027-01-29
+`··········` 0% · 0 of 6 done · due 2027-01-29
 
 Any ZIP, however large, shows its contents in under a second and costs no disk space until a file inside is actually previewed, opened, or dragged out.
 
@@ -81,10 +83,11 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 - [ ] `0027` Unpack an entry the first time it's previewed, opened, or copied <sup>feature · p0 · document</sup>
 - [ ] `0028` Drag out with file promises so entries arrive whole <sup>feature · p1 · browser</sup>
 - [ ] `0029` Show and cancel progress for long adds and extracts <sup>feature · p1 · shell</sup>
+- [ ] `0079` Long work shows on the Dock and says when it's finished <sup>feature · p2 · shell</sup>
 
 ## v0.4 — Part of the Mac
 
-`###·······` 27% · 3 of 11 done · due 2027-03-12
+`##········` 19% · 3 of 16 done · due 2027-03-12
 
 Zipboy works from the Finder as well as in its own window: Quick Look shows what's in an archive, Quick Actions compress and extract, updates arrive by themselves, and every flow works with VoiceOver and the keyboard alone.
 
@@ -98,6 +101,11 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [ ] `0035` VoiceOver and full keyboard access across every flow <sup>feature · p0 · quality</sup>
 - [ ] `0036` Open an archive inside an archive in its own window <sup>feature · p2 · document</sup>
 - [ ] `0038` Offer once to open ZIPs with Zipboy <sup>feature · p2 · system</sup>
+- [ ] `0078` Finder shows an archive's contents in its icon <sup>feature · p2 · system</sup>
+- [ ] `0080` The Dock icon's menu lists open archives and starts a new one <sup>feature · p3 · shell</sup>
+- [ ] `0081` Windows come back as they were, and archives open as tabs <sup>feature · p2 · shell</sup>
+- [ ] `0083` Zipboy can be scripted with AppleScript and Shortcuts <sup>feature · p2 · system</sup>
+- [ ] `0085` Archives Zipboy owns show a Zipboy document icon <sup>feature · p3 · distribution</sup>
 
 ### done
 
@@ -107,7 +115,7 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 
 ## v1.0 — The promise
 
-`··········` 0% · 0 of 6 done · due 2027-04-23
+`··········` 0% · 0 of 8 done · due 2027-04-23
 
 An archive behaves like a Finder folder, reliably, for anyone: hardened against hostile archives, documented, and proven by a public beta. No new features.
 
@@ -119,6 +127,8 @@ An archive behaves like a Finder folder, reliably, for anyone: hardened against 
 - [ ] `0043` A landing page with the download, screenshots, and the format table <sup>docs · p1 · distribution</sup>
 - [ ] `0044` A two-week public beta with every crash and data-loss report closed <sup>chore · p0 · quality</sup>
 - [ ] `0045` Release checklist and the v1.0 tag <sup>chore · p0 · distribution</sup>
+- [ ] `0082` Every user-facing string goes through the localization tables <sup>chore · p2 · quality</sup>
+- [ ] `0084` Help menu search finds Zipboy's own help topics <sup>feature · p2 · distribution</sup>
 
 ## later — Later
 

@@ -5,8 +5,10 @@ title: Spotlight finds files inside archives
 type: feature
 status: backlog
 milestone: later
+depends_on:
+- 30
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-02
 priority: p3
 effort: m
 area: system
