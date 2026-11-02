@@ -15,6 +15,7 @@ paths:
   New edits go through it so undo, redo, and autosave cancellation keep working.
 - A format that can't be written (RAR, 7z, tar) opens as an untitled ZIP (`importedFrom`). Never give
   it the original's `fileURL`: autosave would replace the RAR with a ZIP. `DocumentTests` guards this.
+  Once saved as a ZIP of its own it is an ordinary document, and `importedFrom` is cleared.
 - NSDocument is `@MainActor` but AppKit calls `read`/`write` off it: keep them `nonisolated` and reach
   main state through `onMain` or `Locked`. QuickLook conformances need `@preconcurrency`.
 - `AppDelegate.application(_:open:)` routes non-archives into a new archive (Dock drops); the catch-all

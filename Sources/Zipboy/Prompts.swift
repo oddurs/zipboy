@@ -66,6 +66,19 @@ enum Prompts {
         }
     }
 
+    /// Re-reading names unpacks the archive again from its file. True means go ahead and lose what
+    /// hasn't been saved.
+    static func discardChanges(toReadNamesAs encoding: TextEncoding, in window: NSWindow?) async -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Read names again as \(encoding.title)?"
+        alert.informativeText = "The archive is opened again from its file, so changes you haven’t saved are lost."
+        alert.addButton(withTitle: "Read Again").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        let response = if let window { await alert.beginSheetModal(for: window) } else { alert.runModal() }
+        return response == .alertFirstButtonReturn
+    }
+
     /// Presents an archive or file error with a human-readable explanation and an optional expandable
     /// technical details section so raw `libarchive` or POSIX diagnostics never clutter the main alert.
     static func makeErrorAlert(for error: Error, fileName: String? = nil) -> NSAlert {

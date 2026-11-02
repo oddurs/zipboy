@@ -68,7 +68,16 @@ final class ArchiveDocument: NSDocument {
     /// Filename encoding used for non-UTF-8 entry names; `.auto` unless overridden in View > Text Encoding.
     private(set) var encoding: TextEncoding = .auto
     /// Parent archive document when this archive was opened from inside another archive.
-    weak var parentDocument: ArchiveDocument?
+    weak var parentDocument: ArchiveDocument? {
+        didSet {
+            oldValue?.nestedDocuments.remove(self)
+            parentDocument?.nestedDocuments.add(self)
+        }
+    }
+    /// Archives opened from inside this one. Their files live in this workspace, so they close first.
+    private let nestedDocuments = NSHashTable<ArchiveDocument>.weakObjects()
+    /// Where remembered passwords are kept; tests use a service of their own.
+    var keychainService = Keychain.defaultService
     /// Original Central Directory catalog and per-inode file provenance for verbatim delta saves.
     private(set) var catalog: ZipCatalog?
     private(set) var trackedByInode: [UInt64: TrackedFile] = [:]
@@ -120,7 +129,58 @@ final class ArchiveDocument: NSDocument {
         addWindowController(ArchiveWindowController(document: self))
     }
 
+    /// Archives opened from inside this one close first, each saving into this workspace or asking, as
+    /// closing it would. What they wrote is then in what this one saves, and none is left with a file in
+    /// a workspace that's about to be deleted.
+    override func canClose(
+        withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?
+    ) {
+        guard let nested = nestedDocuments.allObjects.first else {
+            return super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
+        }
+        let answer = CloseAnswer { shouldClose in
+            guard shouldClose else {
+                return self.answer(delegate, shouldCloseSelector, shouldClose: false, contextInfo)
+            }
+            nested.close()
+            self.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
+        }
+        nested.canClose(withDelegate: answer, shouldClose: CloseAnswer.selector, contextInfo: nil)
+    }
+
+    /// Calls AppKit's `document:shouldClose:contextInfo:` back, which Swift can't do through `perform`
+    /// because of the `BOOL`.
+    private func answer(
+        _ delegate: Any, _ selector: Selector?, shouldClose: Bool, _ contextInfo: UnsafeMutableRawPointer?
+    ) {
+        guard let selector, let target = delegate as? NSObject else { return }
+        typealias Callback = @convention(c) (NSObject, Selector, NSDocument, ObjCBool, UnsafeMutableRawPointer?) -> Void
+        let callback = unsafeBitCast(target.method(for: selector), to: Callback.self)
+        callback(target, selector, self, ObjCBool(shouldClose), contextInfo)
+    }
+
+    /// Hears a nested document's answer. AppKit doesn't keep the delegate, so it keeps itself until then.
+    private final class CloseAnswer: NSObject {
+        static let selector = #selector(document(_:shouldClose:contextInfo:))
+        private var answered: ((Bool) -> Void)?
+        private var keepAlive: CloseAnswer?
+
+        init(_ answered: @escaping (Bool) -> Void) {
+            self.answered = answered
+            super.init()
+            keepAlive = self
+        }
+
+        @objc func document(_ document: NSDocument, shouldClose: Bool, contextInfo: UnsafeMutableRawPointer?) {
+            let answered = self.answered
+            self.answered = nil
+            keepAlive = nil
+            answered?(shouldClose)
+        }
+    }
+
     override func close() {
+        parentDocument = nil
         cancelLoading.cancel()
         watcher?.stop()
         watcher = nil
@@ -147,9 +207,10 @@ final class ArchiveDocument: NSDocument {
     private func unpack(_ url: URL, ofType typeName: String) async {
         let cancellation = cancelLoading
         let chosenEncoding = encoding
-        var password = self.password ?? Keychain.password(for: url)
+        var password = self.password ?? Keychain.password(for: url, service: keychainService)
         var usedSavedKeychain = (self.password == nil && password != nil)
         var rememberEnteredInKeychain = false
+        var keychainFailure: Error?
         while true {
             do {
                 let (workspace, summary, parsedCatalog) = try await Task.detached { [password] in
@@ -175,7 +236,11 @@ final class ArchiveDocument: NSDocument {
                 }.value
                 guard !cancellation.isCancelled else { return workspace.discard() }
                 if summary.encrypted, rememberEnteredInKeychain, let password {
-                    Keychain.setPassword(password, for: url)
+                    do {
+                        try Keychain.setPassword(password, for: url, service: keychainService)
+                    } catch {
+                        keychainFailure = error
+                    }
                 }
                 install(
                     workspace,
@@ -189,11 +254,13 @@ final class ArchiveDocument: NSDocument {
                     fileType = Self.zipType
                     suggestedName = Naming.stem(of: url)
                 }
+                // After the contents are in, so the archive opens whether or not the password was kept.
+                if let keychainFailure { reportKeychainFailure(keychainFailure) }
                 return
             } catch let error as ArchiveError where error == .passwordRequired || error == .wrongPassword {
                 guard !cancellation.isCancelled else { return }
                 if usedSavedKeychain {
-                    Keychain.deletePassword(for: url)
+                    Keychain.deletePassword(for: url, service: keychainService)
                     usedSavedKeychain = false
                     let entered = await Prompts.password(
                         for: url.lastPathComponent, retry: false, in: windowForSheet)
@@ -221,23 +288,39 @@ final class ArchiveDocument: NSDocument {
         }
     }
 
-    /// Re-reads the archive from its source file using `newEncoding` for non-UTF-8 entry names.
-    func reload(withEncoding newEncoding: TextEncoding) {
-        guard let sourceURL = source, loading == nil else { return }
+    /// Re-reads the archive from its source file using `newEncoding` for non-UTF-8 entry names. That
+    /// unpacks it afresh, losing unsaved changes and the undo stack, so `confirm` is asked first when
+    /// there are unsaved changes.
+    func reload(withEncoding newEncoding: TextEncoding, confirm: () async -> Bool) async {
+        guard canReload else { return }
+        if isDocumentEdited {
+            // Asked again after the sheet: a save or another reload may have started meanwhile.
+            guard await confirm(), canReload else { return }
+        }
+        guard let sourceURL = source else { return }
         encoding = newEncoding
         let typeName = importedFrom == nil ? Self.zipType : "public.archive"
         cancelLoading.cancel()
         cancelLoading = Cancellation()
         loading = 0
         onChange?()
-        Task { await unpack(sourceURL, ofType: typeName) }
+        await unpack(sourceURL, ofType: typeName)
+        // The workspace is what the file holds again, so there is nothing left to save.
+        updateChangeCount(.changeCleared)
     }
+
+    /// Not while unpacking, nor while a save is replacing the file that would be read.
+    private var canReload: Bool { source != nil && loading == nil && saving == nil }
 
     @objc func selectEncoding(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
             let chosen = TextEncoding(rawValue: raw)
         else { return }
-        reload(withEncoding: chosen)
+        Task {
+            await reload(withEncoding: chosen) {
+                await Prompts.discardChanges(toReadNamesAs: chosen, in: self.windowForSheet)
+            }
+        }
     }
 
     /// What a new archive is called until it's saved: after the one thing put in it, as Finder's
@@ -321,6 +404,11 @@ final class ArchiveDocument: NSDocument {
                 if self.saving?.shown == true { self.report(nil) }
                 self.saving = nil
                 if error == nil {
+                    // Saved as a ZIP of its own, an import no longer answers to the file it came from.
+                    if self.fileURL != nil, self.importedFrom != nil {
+                        self.importedFrom = nil
+                        self.onStatus?()
+                    }
                     self.refreshTrackingAfterSave(to: url, for: saveOperation, identities: identities)
                     self.parentDocument?.childDidSave()
                 }
@@ -492,7 +580,7 @@ final class ArchiveDocument: NSDocument {
             if let menuItem = item as? NSMenuItem, let raw = menuItem.representedObject as? String {
                 menuItem.state = (encoding.rawValue == raw) ? .on : .off
             }
-            return loading == nil && source != nil
+            return canReload
         // Nothing to save or revert to while unpacking.
         case #selector(save(_:)), #selector(saveAs(_:)), #selector(revertToSaved(_:)):
             return loading == nil && super.validateUserInterfaceItem(item)
@@ -780,7 +868,7 @@ final class ArchiveDocument: NSDocument {
         let old = password
         password = new
         if new == nil, let url = source {
-            Keychain.deletePassword(for: url)
+            Keychain.deletePassword(for: url, service: keychainService)
         }
         undoManager?.registerUndo(withTarget: self) { $0.setPassword(old) }
         undoManager?.setActionName(new == nil ? "Remove Password" : "Set Password")
@@ -794,7 +882,11 @@ final class ArchiveDocument: NSDocument {
             if let entered = await Prompts.newPassword(in: window) {
                 setPassword(entered.password)
                 if entered.rememberInKeychain, let url = source {
-                    Keychain.setPassword(entered.password, for: url)
+                    do {
+                        try Keychain.setPassword(entered.password, for: url, service: keychainService)
+                    } catch {
+                        reportKeychainFailure(error)
+                    }
                 }
             }
         }
@@ -804,9 +896,48 @@ final class ArchiveDocument: NSDocument {
         setPassword(nil)
     }
 
+    /// The password is kept by path, so it moves with an archive renamed or moved in Finder while open.
+    nonisolated override func presentedItemDidMove(to newURL: URL) {
+        let old = fileURL
+        super.presentedItemDidMove(to: newURL)
+        guard let old else { return }
+        DispatchQueue.main.async { self.passwordMoved(from: old, to: newURL) }
+    }
+
+    /// The same for File > Move To and renaming in the title bar, which this document does itself and so
+    /// isn't told about as a file presenter.
+    override func move(to url: URL, completionHandler: ((Error?) -> Void)? = nil) {
+        let old = fileURL
+        super.move(to: url) { error in
+            MainActor.assumeIsolated {
+                if error == nil, let old { self.passwordMoved(from: old, to: url) }
+            }
+            completionHandler?(error)
+        }
+    }
+
+    private func passwordMoved(from old: URL, to new: URL) {
+        guard password != nil else { return }
+        do {
+            try Keychain.movePassword(from: old, to: new, service: keychainService)
+        } catch {
+            reportKeychainFailure(error)
+        }
+    }
+
+    /// The archive itself is fine; the person is told so that the next password prompt isn't a surprise.
+    private func reportKeychainFailure(_ error: Error) {
+        if let window = windowForSheet {
+            presentError(error, modalFor: window, delegate: nil, didPresent: nil, contextInfo: nil)
+        } else {
+            presentError(error)
+        }
+    }
+
     override func willPresentError(_ error: Error) -> Error {
         let nsError = error as NSError
-        if nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError {
+        // Cancelling says nothing, and a Keychain failure already says what happened in its own words.
+        if nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError || error is Keychain.Failure {
             return error
         }
         let explanation = ArchiveError.describe(error, fileName: source?.lastPathComponent ?? displayName)
