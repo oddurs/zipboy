@@ -138,6 +138,12 @@ final class SettingsWindowController: NSWindowController {
         compressionStack.alignment = .leading
         compressionStack.spacing = 5
 
+        // The labels sit in their own grid cells, which VoiceOver doesn't tie to the controls beside them.
+        launchPopup.setAccessibilityLabel("On launch")
+        destinationPopup.setAccessibilityLabel("Extract to")
+        wrapPopup.setAccessibilityLabel("Create folder")
+        compressionControl.setAccessibilityLabel("Compression")
+
         let grid = NSGridView(views: [
             [Self.label("On Launch:"), launchPopup],
             [Self.separator(), NSGridCell.emptyContentView],
