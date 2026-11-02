@@ -965,6 +965,49 @@ public enum Archive {
             format: formatName(a), entries: entries, isTruncated: false, isEncrypted: encrypted, namesHidden: false)
     }
 
+    /// The first picture in `archive` that is small enough to read whole and isn't encrypted, for a
+    /// thumbnail. Looks at no more than `scanLimit` entries, so a huge archive with no pictures gives
+    /// up quickly, and never asks for or tries a password.
+    public static func firstImage(
+        in archive: URL, maxBytes: Int64 = 20 << 20, scanLimit: Int = 2_000
+    ) -> (path: String, data: Data)? {
+        useUTF8Names()
+        guard let a = archive_read_new() else { return nil }
+        defer { archive_read_free(a) }
+        archive_read_support_filter_all(a)
+        for support in formats { _ = support(a) }
+        guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else { return nil }
+        var entry: OpaquePointer?
+        for _ in 0..<scanLimit {
+            guard archive_read_next_header(a, &entry) >= ARCHIVE_WARN, let entry else { return nil }
+            let path = name(of: entry, in: a)
+            let size = archive_entry_size(entry)
+            guard archive_entry_filetype(entry) & mode_t(AE_IFMT) == mode_t(AE_IFREG),
+                pictureExtensions.contains((path as NSString).pathExtension.lowercased()),
+                archive_entry_is_encrypted(entry) == 0, size > 0, size <= maxBytes
+            else {
+                if archive_read_data_skip(a) < ARCHIVE_WARN { return nil }
+                continue
+            }
+            // libarchive hands data back in pieces, however big the buffer.
+            var data = Data(count: Int(size))
+            var filled = 0
+            while filled < Int(size) {
+                let read = data.withUnsafeMutableBytes {
+                    archive_read_data(a, $0.baseAddress! + filled, Int(size) - filled)
+                }
+                guard read > 0 else { return nil }
+                filled += read
+            }
+            return (path, data)
+        }
+        return nil
+    }
+
+    static let pictureExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "heic", "heif", "tif", "tiff", "webp", "bmp",
+    ]
+
     private static func check(_ status: Int32, _ a: OpaquePointer) throws {
         guard status >= ARCHIVE_WARN else { throw ArchiveError.unwritable(message(a)) }
     }

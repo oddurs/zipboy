@@ -25,3 +25,7 @@ A Spotlight importer that indexes entry names from ZipCatalog.
 ## Acceptance criteria
 
 - [ ] Searching a name that exists only inside a ZIP finds the archive
+
+## 2026-11-02
+
+2026-11-02: the extension build path is settled (0030's answer); a Spotlight importer is a third .appex in PlugIns, built the same way.

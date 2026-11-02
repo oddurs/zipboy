@@ -26,6 +26,16 @@ let package = Package(
                 .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain", "-Xlinker", "-application_extension"]),
             ]
         ),
+        // Finder's icon for an archive, built the same way.
+        .executableTarget(
+            name: "ZipboyThumbnail",
+            dependencies: ["ZipboyKit"],
+            swiftSettings: [.unsafeFlags(["-application-extension"])],
+            linkerSettings: [
+                .linkedFramework("QuickLookThumbnailing"),
+                .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain", "-Xlinker", "-application_extension"]),
+            ]
+        ),
         .testTarget(name: "ZipboyKitTests", dependencies: ["ZipboyKit"], resources: [.copy("Fixtures")]),
         .testTarget(name: "ZipboyTests", dependencies: ["Zipboy"]),
     ]

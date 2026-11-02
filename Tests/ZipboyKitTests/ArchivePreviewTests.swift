@@ -71,3 +71,40 @@ struct ArchivePreviewTests {
         #expect(html.contains("10,050 items"))
     }
 }
+
+struct FirstImageTests {
+    func zip(_ files: [String: Data], password: String? = nil) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("thumb-\(UUID().uuidString)")
+        for (path, data) in files {
+            let url = dir.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+        }
+        let out = dir.appendingPathExtension("zip")
+        try Archive.writeZip(from: dir, to: out, password: password)
+        return out
+    }
+
+    /// Any bytes will do: the finder reads by name and size, and the extension decodes.
+    let picture = Data((0..<70_000).map { UInt8($0 % 251) })
+
+    @Test func findsThePictureWholeEvenWhenItIsCompressed() throws {
+        let url = try zip(["notes.txt": Data("hi".utf8), "Photos/cover.jpg": picture])
+        let found = try #require(Archive.firstImage(in: url))
+        #expect(found.path == "Photos/cover.jpg")
+        #expect(found.data == picture)
+    }
+
+    @Test func noPictureMeansNil() throws {
+        #expect(Archive.firstImage(in: try zip(["a.txt": Data("a".utf8)])) == nil)
+    }
+
+    @Test func passesOverPicturesTooBigToRead() throws {
+        #expect(Archive.firstImage(in: try zip(["big.png": picture]), maxBytes: 1_000) == nil)
+    }
+
+    @Test func neverTriesAPassword() throws {
+        #expect(Archive.firstImage(in: try zip(["a.png": picture], password: "secret")) == nil)
+    }
+}
