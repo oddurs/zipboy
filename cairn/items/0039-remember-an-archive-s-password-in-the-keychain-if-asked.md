@@ -6,7 +6,7 @@ type: feature
 status: backlog
 milestone: v0.4
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 priority: p3
 effort: s
 area: document
@@ -23,4 +23,8 @@ A Remember in Keychain checkbox on the password sheet, keyed by the archive's fi
 ## Acceptance criteria
 
 - [ ] Checked, the next open of the same file needs no password
-- [ ] Removing the password from the archive removes the Keychain item
+- [x] Removing the password from the archive removes the Keychain item
+
+## 2026-11-01
+
+Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Keychain storage exists. Criterion 2: removePassword deletes the item (read for the purpose). Criterion 1 failed after any save, since items were keyed by inode and saves replace the file; 0070 (PR #26) keys them by path.

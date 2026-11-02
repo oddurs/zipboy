@@ -35,3 +35,7 @@ Compared to reference archive managers (BetterZip, MacPacker, Keka, The Unarchiv
 - [x] `Archive.verify`, `Checksums` (CRC-32 & SHA-256), and `Archive.export` (`.tar.gz`, `.tar.xz`, `.tar`, `.7z`) pass unit tests
 - [x] `TextEncoding` auto-detects and decodes Shift-JIS, GB18030, Windows-1251, and CP437 names, and `View > Text Encoding` re-reads archives
 - [x] Nested archives open as child documents in Zipboy and Finder Services (`NSServices`) compress and extract without opening a window
+
+## 2026-11-01
+
+Overlaps 0017, 0018, 0019, 0020, 0021, 0028, 0032, 0036, 0050. Follow-ups from review: 0068 (lost edits mid-save, dropped extra fields), 0069 (ZipCatalog overflow), 0070 (encoding reload, nested close), 0071 (export encryption, encoding vs UTF-8 flag, durability, services off main).

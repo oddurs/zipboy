@@ -33,13 +33,12 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ## v0.2 — Saves in seconds
 
-`######····` 53% · 10 of 19 done · due 2026-12-18
+`######····` 55% · 12 of 22 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
 ### backlog
 
-- [ ] `0017` Copy unchanged ZIP entries verbatim: our own writer, or libarchive? <sup>spike · p0 · archive</sup>
 - [ ] `0018` ZipCatalog: read a ZIP's central directory without unpacking <sup>feature · p0 · archive</sup>
 - [ ] `0019` ZipWriter: write a ZIP that copies unchanged entries byte for byte <sup>feature · p0 · archive</sup>
 - [ ] `0020` Know which workspace files still match their archive entry <sup>feature · p0 · document</sup>
@@ -48,9 +47,12 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [ ] `0023` Readable errors for every failure a user can hit <sup>feature · p1 · document</sup>
 - [ ] `0024` Show the version and build from the release tag in About <sup>feature · p2 · shell</sup>
 - [ ] `0057` Read Deflate64 ZIPs, which Windows makes for large files <sup>feature · p2 · archive</sup>
+- [ ] `0073` Stop offering to open zstd and lz4 files we can't read <sup>bug · p2 · distribution</sup>
+- [ ] `0074` Move timing budgets out of the unit suite <sup>chore · p2 · quality</sup>
 
 ### done
 
+- [x] `0017` Copy unchanged ZIP entries verbatim: our own writer, or libarchive? <sup>spike · p0 · archive</sup>
 - [x] `0059` Give Zipboy a look of its own <sup>feature · p1 · shell</sup>
 - [x] `0062` Draw the icon as a running manga Zipboy with speed streaks <sup>feature · p1 · shell</sup>
 - [x] `0063` Broaden supported compression types and harden archive durability <sup>feature · p1 · archive</sup>
@@ -61,6 +63,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [x] `0069` Hostile ZIPs can't crash the reader or slip past the bomb guards <sup>bug · p0 · archive</sup>
 - [x] `0070` Encoding reloads, nested archives, and Keychain survive edits and saves <sup>bug · p1 · document</sup>
 - [x] `0071` Export keeps encryption, and archive I/O stays off shared state <sup>bug · p1 · archive</sup>
+- [x] `0072` Reconcile the board with the 2026-11-01 batch <sup>chore · p1 · quality</sup>
 
 ## v0.3 — Opens instantly
 
@@ -78,7 +81,7 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 
 ## v0.4 — Part of the Mac
 
-`#·········` 9% · 1 of 11 done · due 2027-03-12
+`##········` 18% · 2 of 11 done · due 2027-03-12
 
 Zipboy works from the Finder as well as in its own window: Quick Look shows what's in an archive, Quick Actions compress and extract, updates arrive by themselves, and every flow works with VoiceOver and the keyboard alone.
 
@@ -91,12 +94,12 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [ ] `0034` Updates arrive without the user doing anything <sup>feature · p1 · distribution</sup>
 - [ ] `0035` VoiceOver and full keyboard access across every flow <sup>feature · p0 · quality</sup>
 - [ ] `0036` Open an archive inside an archive in its own window <sup>feature · p2 · document</sup>
-- [ ] `0037` Spring-loaded folders and a drop target on the empty window <sup>feature · p2 · browser</sup>
 - [ ] `0038` Offer once to open ZIPs with Zipboy <sup>feature · p2 · system</sup>
 - [ ] `0039` Remember an archive's password in the Keychain, if asked <sup>feature · p3 · document</sup>
 
 ### done
 
+- [x] `0037` Spring-loaded folders and a drop target on the empty window <sup>feature · p2 · browser</sup>
 - [x] `0066` Readable errors, hostile archive guards, Keychain passwords, spring-loaded folders, version stamping, and Help guide <sup>feature · p0 · archive</sup>
 
 ## v1.0 — The promise

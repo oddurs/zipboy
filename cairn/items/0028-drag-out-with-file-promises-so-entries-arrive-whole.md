@@ -8,7 +8,7 @@ milestone: v0.3
 depends_on:
 - 27
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 priority: p1
 effort: m
 area: browser
@@ -27,3 +27,7 @@ Provide `NSFilePromiseProvider` items; write each entry to the destination Finde
 - [ ] Dragging a not-yet-unpacked file or folder to Finder produces the complete item
 - [ ] Dragging to Mail and Messages attaches the file
 - [ ] A 2 GB entry dragged out shows Finder's own progress
+
+## 2026-11-01
+
+Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Drag-out now uses NSFilePromiseProvider (BrowserViewController), but entries are still unpacked up front, so criterion 1's not-yet-unpacked case waits on 0027. Criteria 2 and 3 not verified.

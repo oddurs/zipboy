@@ -3,10 +3,11 @@ id: 17
 uid: b4b4bca9-a377-43f5-a4b0-58f643ab13fe
 title: 'Copy unchanged ZIP entries verbatim: our own writer, or libarchive?'
 type: spike
-status: backlog
+status: done
 milestone: v0.2
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
+closed_at: 2026-11-01
 priority: p0
 effort: s
 area: archive
@@ -25,3 +26,11 @@ Saving a 2 GB archive takes about a minute today. This decides the design of the
 One day, ending in a prototype that copies one entry verbatim and adds one new entry, readable by `unzip -t` and Archive Utility.
 
 ## Answer
+
+## 2026-11-01
+
+Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Answered in practice: Zipboy writes ZIPs with its own ZipWriter (0019, Sources/ZipboyKit/ZipWriter.swift), copying unchanged entries' bytes and compressing new ones through libarchive. Encrypted archives are never copied verbatim; they take the full write.
+
+## Result
+
+Our own writer: ZipWriter copies unchanged entries' bytes and compresses new ones through libarchive; encrypted archives always take the full write.

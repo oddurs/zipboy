@@ -36,3 +36,7 @@ area: archive
 - [x] Keychain password storage saves, retrieves, and deletes archive passwords with unit tests
 - [x] Hovering a drag over a collapsed folder for 0.7 s expands it, and **Help > Zipboy Help** opens the offline guide
 - [x] `scripts/task build` stamps version/build from git and `scripts/bench` measures catalog listing, delta save, and extraction budgets
+
+## 2026-11-01
+
+Overlaps 0022, 0023, 0024, 0037, 0038, 0039, 0041, 0042. Follow-ups from review: 0069 (bomb guards), 0070 (Keychain keyed by inode).

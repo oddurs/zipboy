@@ -6,7 +6,7 @@ type: docs
 status: backlog
 milestone: v1.0
 created: 2026-10-20
-updated: 2026-10-20
+updated: 2026-11-01
 priority: p1
 effort: m
 area: distribution
@@ -22,6 +22,10 @@ A small Apple Help Book, or a single bundled HTML page if the Help Book can't be
 
 ## Acceptance criteria
 
-- [ ] Help > Zipboy Help opens the guide offline
+- [x] Help > Zipboy Help opens the guide offline
 - [ ] Every README flow has a section
-- [ ] Searching Help for “password” finds the password section
+- [x] Searching Help for “password” finds the password section
+
+## 2026-11-01
+
+Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Help > Zipboy Help (⌘?) opens an in-app, searchable guide (criterion 1). Criterion 3: helpWindowFiltersTopicsAndFindsPasswordSection. Criterion 2 not checked flow by flow against the README. The batch also shipped Resources/Help.html, which nothing loaded; 0072 removes it.
