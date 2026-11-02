@@ -309,7 +309,12 @@ import ZipboyKit
         #expect(!browser.outline.isItemExpanded(folderNode))
 
         browser.scheduleSpringLoad(for: folderNode)
-        try await Task.sleep(for: .milliseconds(120))
+        // Waits for the folder to open rather than a fixed time: another suite can hold the main thread
+        // for seconds, and a fixed sleep then loses the race and fails for nothing.
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !browser.outline.isItemExpanded(folderNode), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         #expect(browser.outline.isItemExpanded(folderNode))
     }
 

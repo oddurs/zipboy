@@ -53,6 +53,27 @@ import Testing
         #expect(imported.contains { $0["UTTypeIdentifier"] as? String == "com.rarlab.rar-archive" })
     }
 
+    @Test func theQuickLookExtensionPreviewsOnlyWhatTheAppOpens() throws {
+        let data = try Data(contentsOf: Self.root.appendingPathComponent("Resources/QuickLook/Info.plist"))
+        let info = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        let ext = try #require(info["NSExtension"] as? [String: Any])
+        // An extension's identifier must sit under its app's, or the system won't load it.
+        #expect((info["CFBundleIdentifier"] as? String)?.hasPrefix("com.oddurs.zipboy.") == true)
+        #expect(info["CFBundleExecutable"] as? String == "ZipboyQuickLook")
+        #expect(ext["NSExtensionPointIdentifier"] as? String == "com.apple.quicklook.preview")
+        // The class Quick Look instantiates, by its Objective-C name.
+        let provider = try String(
+            contentsOf: Self.root.appendingPathComponent("Sources/ZipboyQuickLook/PreviewProvider.swift"),
+            encoding: .utf8)
+        #expect(provider.contains("@objc(\(try #require(ext["NSExtensionPrincipalClass"] as? String)))"))
+
+        let attributes = try #require(ext["NSExtensionAttributes"] as? [String: Any])
+        let previewed = try #require(attributes["QLSupportedContentTypes"] as? [String])
+        let types = try #require(Self.infoPlist()["CFBundleDocumentTypes"] as? [[String: Any]])
+        let opened = Set(types.flatMap { $0["LSItemContentTypes"] as? [String] ?? [] })
+        for type in previewed { #expect(opened.contains(type), "\(type) is previewed but the app can't open it") }
+    }
+
     @Test func shipsItsIcon() throws {
         let name = try #require(Self.infoPlist()["CFBundleIconFile"] as? String)
         #expect(FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("Resources/\(name).icns").path))

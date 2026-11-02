@@ -16,6 +16,16 @@ let package = Package(
                 .linkedFramework("QuickLookThumbnailing"),
             ]
         ),
+        // Finder's Quick Look preview. An app extension starts in NSExtensionMain, not main.
+        .executableTarget(
+            name: "ZipboyQuickLook",
+            dependencies: ["ZipboyKit"],
+            swiftSettings: [.unsafeFlags(["-application-extension"])],
+            linkerSettings: [
+                .linkedFramework("QuickLookUI"),
+                .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain", "-Xlinker", "-application_extension"]),
+            ]
+        ),
         .testTarget(name: "ZipboyKitTests", dependencies: ["ZipboyKit"], resources: [.copy("Fixtures")]),
         .testTarget(name: "ZipboyTests", dependencies: ["Zipboy"]),
     ]

@@ -906,6 +906,65 @@ public enum Archive {
             .volumeAvailableCapacityForImportantUsage
     }
 
+    /// What `archive` holds, read without unpacking anything: a ZIP's central directory, or the headers
+    /// of any other format, skipping over each entry's data. Stops after `limit` entries. An archive whose
+    /// names are themselves encrypted, as a 7z or RAR can be, comes back with `namesHidden`.
+    public static func list(_ archive: URL, limit: Int = 10_000) throws -> ArchiveListing {
+        if let catalog = try? ZipCatalog.read(from: archive) {
+            let entries = catalog.entries.prefix(limit).map {
+                ArchiveListing.Entry(
+                    path: $0.path, size: Int64(clamping: $0.uncompressedSize), isDirectory: $0.isDirectory,
+                    modified: $0.modified)
+            }
+            return ArchiveListing(
+                format: "ZIP", entries: Array(entries), isTruncated: catalog.entries.count > limit,
+                isEncrypted: catalog.isEncrypted, namesHidden: false)
+        }
+        useUTF8Names()
+        guard let a = archive_read_new() else { throw ArchiveError.unreadable("Out of memory.") }
+        defer { archive_read_free(a) }
+        archive_read_support_filter_all(a)
+        for support in formats { _ = support(a) }
+        guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else {
+            throw ArchiveError.unreadable(message(a))
+        }
+        var entries: [ArchiveListing.Entry] = []
+        var encrypted = false
+        var entry: OpaquePointer?
+        while true {
+            let status = archive_read_next_header(a, &entry)
+            if status == ARCHIVE_EOF { break }
+            guard status >= ARCHIVE_WARN, let entry else {
+                if entries.isEmpty, isPasswordProblem(a) {
+                    return ArchiveListing(
+                        format: formatName(a), entries: [], isTruncated: false, isEncrypted: true, namesHidden: true)
+                }
+                // A damaged tail still leaves the entries before it worth showing.
+                if entries.isEmpty { throw ArchiveError.unreadable(message(a)) }
+                break
+            }
+            if entries.count == limit {
+                return ArchiveListing(
+                    format: formatName(a), entries: entries, isTruncated: true, isEncrypted: encrypted,
+                    namesHidden: false)
+            }
+            let path = name(of: entry, in: a)
+            let isDirectory = archive_entry_filetype(entry) & mode_t(AE_IFMT) == mode_t(AE_IFDIR) || path.hasSuffix("/")
+            encrypted = encrypted || archive_entry_is_encrypted(entry) != 0
+            entries.append(
+                ArchiveListing.Entry(
+                    path: path.hasSuffix("/") ? String(path.dropLast()) : path,
+                    size: archive_entry_size_is_set(entry) != 0 ? archive_entry_size(entry) : 0,
+                    isDirectory: isDirectory,
+                    modified: archive_entry_mtime_is_set(entry) != 0
+                        ? Date(timeIntervalSince1970: TimeInterval(archive_entry_mtime(entry))) : nil))
+            // An encrypted 7z can't even skip its data; what was listed so far still stands.
+            if archive_read_data_skip(a) < ARCHIVE_WARN { break }
+        }
+        return ArchiveListing(
+            format: formatName(a), entries: entries, isTruncated: false, isEncrypted: encrypted, namesHidden: false)
+    }
+
     private static func check(_ status: Int32, _ a: OpaquePointer) throws {
         guard status >= ARCHIVE_WARN else { throw ArchiveError.unwritable(message(a)) }
     }
