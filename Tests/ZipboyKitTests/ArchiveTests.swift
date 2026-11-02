@@ -719,14 +719,14 @@ import zlib
             fileName: "novel.zip"
         )
         #expect(unsupported.title.contains("unsupported"))
-        #expect(unsupported.message.contains("Zipboy doesn’t support"))
+        #expect(unsupported.message.contains("can’t read yet"))
 
         let noPerm = ArchiveError.describe(
             CocoaError(.fileWriteNoPermission),
             fileName: "locked.zip"
         )
         #expect(noPerm.title.contains("permission"))
-        #expect(noPerm.message.contains("Duplicate"))
+        #expect(noPerm.recovery == .duplicate)
 
         let diskFull = ArchiveError.describe(
             ArchiveError.noSpace(needed: 500 << 20, available: 10 << 20),

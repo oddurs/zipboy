@@ -106,3 +106,40 @@ struct FirstImageTests {
         #expect(Archive.firstImage(in: try zip(["a.png": picture], password: "secret")) == nil)
     }
 }
+
+/// Every failure a person can hit, as the alert will word it.
+struct ErrorWordingTests {
+    static let cases: [(String, Error, ArchiveError.Recovery?)] = [
+        ("truncated", ArchiveError.unreadable("Truncated input file (needed 1048576 bytes, only 0 available)"), nil),
+        ("damaged", ArchiveError.unreadable("Damaged tar archive"), nil),
+        ("unsupported", ArchiveError.unreadable("Unsupported ZIP compression method (14: lzma)"), nil),
+        ("encrypted 7z", ArchiveError.unsupportedEncryption(format: "7-Zip"), nil),
+        ("wrong password", ArchiveError.wrongPassword, nil),
+        ("no permission to save", CocoaError(.fileWriteNoPermission), .duplicate),
+        ("read-only volume", POSIXError(.EROFS), .duplicate),
+        ("unwritable", ArchiveError.unwritable("Permission denied"), .duplicate),
+        ("disk full", CocoaError(.fileWriteOutOfSpace), .freeSpace),
+        ("disk full, POSIX", POSIXError(.ENOSPC), .freeSpace),
+        ("not enough space", ArchiveError.noSpace(needed: 2_000_000, available: 1_000), .freeSpace),
+    ]
+
+    @Test func everyFailureNamesTheFileAndTheNextStep() {
+        for (name, error, recovery) in Self.cases {
+            let said = ArchiveError.describe(error, fileName: "Photos.zip")
+            let words = said.title + " " + said.message
+            #expect(words.contains("“Photos.zip”"), "\(name): \(words)")
+            #expect(!said.message.isEmpty, "\(name)")
+            #expect(said.recovery == recovery, "\(name)")
+            // libarchive's and the system's own wording stays in the details.
+            for raw in ["Truncated input", "needed 1048576", "Damaged tar", "Permission denied", "POSIX", "NSCocoa"] {
+                #expect(!words.contains(raw), "\(name) shows “\(raw)”: \(words)")
+            }
+        }
+    }
+
+    @Test func anUnsupportedMethodIsNamed() {
+        let said = ArchiveError.describe(
+            ArchiveError.unreadable("Unsupported ZIP compression method (14: lzma)"), fileName: "a.zip")
+        #expect(said.message.contains("“lzma”"))
+    }
+}

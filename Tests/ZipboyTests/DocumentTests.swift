@@ -630,3 +630,28 @@ final class RecordingNotifier: Notifier {
         #expect(!FileManager.default.fileExists(atPath: disk.path))
     }
 }
+
+/// An error's alert offers the next step as a button.
+@MainActor
+@Suite struct ErrorRecoveryTests {
+    @Test func aPermissionErrorOffersDuplicateAndAFullDiskOffersStorage() throws {
+        let doc = ArchiveDocument()
+        defer { doc.close() }
+        let denied = doc.willPresentError(CocoaError(.fileWriteNoPermission)) as NSError
+        #expect(denied.localizedRecoveryOptions == ["Duplicate…", "Cancel"])
+        #expect(denied.recoveryAttempter is ErrorRecovery)
+        let full = doc.willPresentError(POSIXError(.ENOSPC)) as NSError
+        #expect(full.localizedRecoveryOptions == ["Open Storage Settings", "Cancel"])
+        // Nothing to do about a wrong password but try again, so no button.
+        #expect((doc.willPresentError(ArchiveError.wrongPassword) as NSError).localizedRecoveryOptions == nil)
+    }
+
+    @Test func onlyTheFirstButtonRecovers() {
+        var ran = 0
+        let recovery = ErrorRecovery(.duplicate) { ran += 1 }
+        #expect(!recovery.attemptRecovery(fromError: CocoaError(.fileWriteNoPermission), optionIndex: 1))
+        #expect(ran == 0)
+        #expect(recovery.attemptRecovery(fromError: CocoaError(.fileWriteNoPermission), optionIndex: 0))
+        #expect(ran == 1)
+    }
+}
