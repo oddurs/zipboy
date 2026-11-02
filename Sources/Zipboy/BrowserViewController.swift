@@ -25,7 +25,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     private var sortKey = Node.SortKey.name
     private var ascending = true
     /// Paths being dragged from this list, to tell a move inside the archive from an add.
-    private var dragged: [String] = []
+    var dragged: [String] = []
     private var shownOnce = false
     /// Kept so it can come back after an empty archive hides it.
     private var header: NSTableHeaderView?
@@ -54,10 +54,8 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         addColumn(Self.kindColumn, "Kind", width: 170, min: 60, key: .kind)
         outline.outlineTableColumn = outline.tableColumns.first
         outline.style = .inset
-        // No stripes: the selection capsule and the column edges carry the rows on their own.
         outline.usesAlternatingRowBackgroundColors = false
-        outline.rowHeight = 26
-        outline.intercellSpacing = NSSize(width: Theme.Space.s, height: 0)
+        outline.rowHeight = 24
         outline.allowsMultipleSelection = true
         outline.autoresizesOutlineColumn = false
         // The last column takes up the slack, so rows end where the list does.
@@ -148,7 +146,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
 
         let hasRows = shown?.children.isEmpty == false
         empty.isHidden = hasRows
-        empty.mode = query.isEmpty ? .drop : .noResults
+        empty.mode = query.isEmpty ? .drop : .noResults(query)
         // Column headers over nothing are noise; they come back with the first item.
         showHeader(tree.children.isEmpty == false)
         selectionChanged()
@@ -235,17 +233,19 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let folder = targetFolder
         panel.beginSheetModal(for: window) { response in
             guard response == .OK else { return }
-            MainActor.assumeIsolated { self.add(panel.urls, into: folder) }
+            MainActor.assumeIsolated { _ = self.add(panel.urls, into: folder) }
         }
     }
 
-    private func add(_ urls: [URL], into folder: String) {
-        guard let document, !urls.isEmpty else { return }
+    /// Adds in the background; the task is returned so a caller can wait for the items to show.
+    @discardableResult
+    func add(_ urls: [URL], into folder: String) -> Task<Void, Never>? {
+        guard let document, !urls.isEmpty else { return nil }
         let conflicts = Prompts.Conflicts(window: view.window, count: urls.count)
-        Task {
+        return Task {
             do {
-                try await document.add(urls, into: folder) { await conflicts.resolve($0) }
-                expand(folder)
+                // Shown and selected where they landed, so what was added is never a mystery.
+                reveal(try await document.add(urls, into: folder) { await conflicts.resolve($0) })
             } catch {
                 document.presentError(error)
             }
@@ -275,6 +275,18 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         outline.editColumn(0, row: row, with: nil, select: true)
         let base = node.isDirectory ? node.name : (node.name as NSString).deletingPathExtension
         outline.currentEditor()?.selectedRange = NSRange(location: 0, length: (base as NSString).length)
+    }
+
+    /// Escape puts the old name back and stops editing, as in Finder, rather than committing it.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.cancelOperation(_:)), let field = control as? NSTextField else {
+            return false
+        }
+        let row = outline.row(for: field)
+        if let node = outline.item(atRow: row) as? Node { field.stringValue = node.name }
+        field.abortEditing()
+        view.window?.makeFirstResponder(outline)
+        return true
     }
 
     @objc private func nameEdited(_ sender: NSTextField) {
@@ -499,7 +511,18 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     // MARK: Context menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        let event = NSApp.currentEvent
+        let byMouse =
+            event?.type == .rightMouseDown
+            || (event?.type == .leftMouseDown && event?.modifierFlags.contains(.control) == true)
+        fillContextMenu(menu, onBlank: byMouse && outline.clickedRow < 0)
+    }
+
+    /// A right-click on blank space is about the archive, as in Finder: the selection lets go, so New
+    /// Folder and Paste land at the top rather than inside something the person isn't pointing at.
+    func fillContextMenu(_ menu: NSMenu, onBlank: Bool) {
         menu.removeAllItems()
+        if onBlank { outline.deselectAll(nil) }
         let nodes = targets
         // The same symbols the menu bar gives these commands, so the two menus read as one.
         func add(_ title: String, _ action: Selector, _ symbol: String) {
@@ -525,7 +548,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         }
         add("Quick Look \(one)", #selector(quickLookClicked(_:)), "eye")
         menu.addItem(.separator())
-        add("Extract \(one)", #selector(extract(_:)), "arrow.down.to.line")
+        add("Extract \(one)", #selector(extract(_:)), "square.and.arrow.down")
         add("Extract \(one) To…", #selector(extractTo(_:)), "folder")
         add("Copy", #selector(copy(_:)), "doc.on.doc")
         menu.addItem(.separator())
@@ -654,6 +677,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             field.isEditable = true
             field.target = self
             field.action = #selector(nameEdited(_:))
+            field.delegate = self
             NSLayoutConstraint.activate([
                 image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
                 image.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
@@ -724,9 +748,15 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
 
     private func dropEnded() {
         cancelSpringLoad()
-        empty.highlighted = false
-        outline.rootDropGlow = false
+        highlightTopLevel(false)
         outline.draggingDestinationFeedbackStyle = .regular
+    }
+
+    /// Lights the archive's top level as a drop target: the empty list's drop area, or the whole
+    /// list's edge once it has rows. The inspector uses it too, since its drops land there.
+    func highlightTopLevel(_ on: Bool) {
+        empty.highlighted = on && !empty.isHidden
+        outline.rootDropGlow = on && empty.isHidden
     }
 
     func scheduleSpringLoad(for folder: Node?) {
@@ -758,13 +788,11 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         springLoadTargetPath = nil
     }
 
-    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
-        outlineView.makeView(withIdentifier: ArchiveRowView.reuse, owner: self) as? ArchiveRowView
-            ?? {
-                let row = ArchiveRowView()
-                row.identifier = ArchiveRowView.reuse
-                return row
-            }()
+    /// Typing a name jumps to it, as in any Finder list.
+    func outlineView(
+        _ outlineView: NSOutlineView, typeSelectStringFor tableColumn: NSTableColumn?, item: Any
+    ) -> String? {
+        tableColumn?.identifier == Self.nameColumn ? (item as? Node)?.name : nil
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
@@ -848,20 +876,24 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         if folder?.path.isEmpty == true { folder = nil }
         outlineView.setDropItem(folder, dropChildIndex: NSOutlineViewDropOnItemIndex)
         scheduleSpringLoad(for: folder)
-        // A drop on a folder lights its row; a drop on the archive itself lights the tray when it's
-        // empty, or the whole list's edge when it isn't.
-        let onRoot = folder == nil
-        outline.draggingDestinationFeedbackStyle = onRoot ? .none : .regular
-        empty.highlighted = onRoot && !empty.isHidden
-        outline.rootDropGlow = onRoot && empty.isHidden
 
-        guard info.draggingSource as? NSOutlineView === outline else { return .copy }
-        let destination = folder?.path ?? ""
-        let movable = dragged.contains { path in
-            (path as NSString).deletingLastPathComponent != destination && destination != path
-                && !destination.hasPrefix(path + "/")
+        let operation: NSDragOperation
+        if info.draggingSource as? NSOutlineView === outline {
+            let destination = folder?.path ?? ""
+            let movable = dragged.contains { path in
+                (path as NSString).deletingLastPathComponent != destination && destination != path
+                    && !destination.hasPrefix(path + "/")
+            }
+            operation = movable ? .move : []
+        } else {
+            operation = .copy
         }
-        return movable ? .move : []
+        // A drop on a folder lights its row; a drop on the archive itself lights the top level. A
+        // drop that would be refused lights nothing, so the highlight never promises what won't happen.
+        let onRoot = folder == nil
+        outline.draggingDestinationFeedbackStyle = onRoot || operation.isEmpty ? .none : .regular
+        highlightTopLevel(onRoot && !operation.isEmpty)
+        return operation
     }
 
     func outlineView(
@@ -949,9 +981,10 @@ final class BrowserOutlineView: NSOutlineView {
     /// Hears when a drag leaves or finishes, so highlights can go.
     var onDragDone: (() -> Void)?
 
-    /// A neon edge round the visible list while a drop would land in the archive's top level.
+    /// An accent edge round the visible list while a drop would land in the archive's top level, the
+    /// way Finder rings a window that a drop will go into.
     var rootDropGlow = false {
-        didSet { if rootDropGlow != oldValue { needsDisplay = true } }
+        didSet { if rootDropGlow != oldValue { setNeedsDisplay(visibleRect) } }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -960,10 +993,10 @@ final class BrowserOutlineView: NSOutlineView {
         let edge = NSBezierPath(
             roundedRect: visibleRect.insetBy(dx: Theme.Space.xs, dy: Theme.Space.xs), xRadius: Theme.Radius.m,
             yRadius: Theme.Radius.m)
-        Theme.dropFill.setFill()
+        NSColor.controlAccentColor.withAlphaComponent(0.08).setFill()
         edge.fill()
-        Theme.accent.setStroke()
-        edge.lineWidth = 1.5
+        NSColor.controlAccentColor.setStroke()
+        edge.lineWidth = 2.5
         edge.stroke()
     }
 

@@ -22,8 +22,12 @@ final class PreviewViewController: NSViewController {
     /// The action buttons and the rule above them; hidden, it gives its space back to the body.
     private let footer = NSView()
     private let buttons = NSStackView()
-    private(set) var secondary = ActionButton("", action: nil, prominent: false)
-    private(set) var primary = ActionButton("", action: nil, prominent: true)
+    let secondary = NSButton.push("", action: nil)
+    let primary = NSButton.push("", action: nil, prominent: true)
+
+    /// Files dragged over the inspector go into the archive's top level, as if dropped on the list.
+    var onDropHover: ((Bool) -> Void)?
+    var onDrop: (([URL]) -> Void)?
 
     private var checksums: [String: Checksums] = [:]
     /// The item on show and its key, so a checksum that finishes late doesn't land on the next one.
@@ -94,9 +98,11 @@ final class PreviewViewController: NSViewController {
         footer.addSubview(rule)
         footer.addSubview(buttons)
 
-        let root = NSStackView(views: [scroll, footer])
+        let root = FileDropView(views: [scroll, footer])
         root.orientation = .vertical
         root.spacing = 0
+        root.onHover = { [weak self] in self?.onDropHover?($0) }
+        root.onDrop = { [weak self] in self?.onDrop?($0) }
 
         NSLayoutConstraint.activate([
             // `.width` alignment only makes arranged views match each other; these pin them to the edges.
@@ -299,10 +305,10 @@ final class PreviewViewController: NSViewController {
     private func actions(
         secondary: (title: String, action: Selector), primary: (title: String, action: Selector), enabled: Bool
     ) {
-        self.secondary.label = secondary.title
+        self.secondary.title = secondary.title
         self.secondary.action = secondary.action
         self.secondary.isEnabled = enabled
-        self.primary.label = primary.title
+        self.primary.title = primary.title
         self.primary.action = primary.action
         self.primary.isEnabled = enabled
     }
@@ -512,6 +518,52 @@ final class Badge: NSView {
     }
 
     override var wantsUpdateLayer: Bool { true }
+}
+
+/// A stack that takes files dragged in from outside the window. Drags from the list itself are left
+/// alone: dropping a row on the inspector means nothing.
+@MainActor
+final class FileDropView: NSStackView {
+    var onHover: ((Bool) -> Void)?
+    var onDrop: (([URL]) -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) { fatalError("FileDropView is built in code") }
+
+    private func files(_ info: NSDraggingInfo) -> [URL] {
+        guard !(info.draggingSource is NSOutlineView) else { return [] }
+        return info.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let accepted = !files(sender).isEmpty
+        onHover?(accepted)
+        return accepted ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        files(sender).isEmpty ? [] : .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onHover?(false)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        onHover?(false)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = files(sender)
+        guard !urls.isEmpty else { return false }
+        onDrop?(urls)
+        return true
+    }
 }
 
 /// A document view that lays out from the top, as reading order does.

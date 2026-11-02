@@ -22,6 +22,8 @@ final class ArchiveWindowController: NSWindowController, NSToolbarDelegate,
 
         browser.document = document
         browser.onSelectionChange = { [weak self] nodes in self?.selectionChanged(nodes) }
+        preview.onDropHover = { [weak self] in self?.browser.highlightTopLevel($0) }
+        preview.onDrop = { [weak self] in self?.browser.add($0, into: "") }
 
         let list = NSSplitViewItem(viewController: browser)
         list.minimumThickness = 320
@@ -140,7 +142,7 @@ final class ArchiveWindowController: NSWindowController, NSToolbarDelegate,
                 #selector(BrowserViewController.newFolder(_:)))
         case .extract:
             button(
-                identifier, "Extract", "arrow.down.to.line", "Extract the selected items, or everything",
+                identifier, "Extract", "square.and.arrow.down", "Extract the selected items, or everything",
                 #selector(BrowserViewController.extract(_:)))
         case .quickLook:
             button(

@@ -822,9 +822,13 @@ final class ArchiveDocument: NSDocument {
     }
 
     /// Copies items from outside into `folder`. Each name that is already there needs a `Resolution`.
-    /// The copying runs off the main thread, since a dropped folder can be any size.
-    func add(_ urls: [URL], into folder: String, resolve: (String) async -> Prompts.Resolution?) async throws {
-        guard let workspace else { return }
+    /// The copying runs off the main thread, since a dropped folder can be any size. Returns where
+    /// each added item landed, under the name it ended up with.
+    @discardableResult
+    func add(_ urls: [URL], into folder: String, resolve: (String) async -> Prompts.Resolution?) async throws
+        -> [String]
+    {
+        guard let workspace else { return [] }
         let fm = FileManager.default
         var plan: [(source: URL, name: String)] = []
         var replaced: [Move] = []
@@ -846,7 +850,7 @@ final class ArchiveDocument: NSDocument {
             plan.append((url, name))
             taken.insert(name)
         }
-        guard !plan.isEmpty else { return }
+        guard !plan.isEmpty else { return [] }
 
         report(plan.count == 1 ? "Adding “\(plan[0].name)”…" : "Adding \(plan.count) items…")
         defer { report(nil) }
@@ -860,6 +864,7 @@ final class ArchiveDocument: NSDocument {
             }
         }.value
         try perform(replaced + staged, named: plan.count == 1 ? "Add Item" : "Add Items")
+        return plan.map { folder.isEmpty ? $0.name : "\(folder)/\($0.name)" }
     }
 
     /// Sets the password the next save encrypts with, or with nil saves without one. Undoable, and

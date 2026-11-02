@@ -4,8 +4,8 @@ import ZipboyKit
 
 @testable import Zipboy
 
-/// The parts of the look that aren't just pixels: motion that respects Reduce Motion, and what
-/// VoiceOver hears.
+/// The parts of the look and feel that aren't just pixels: what VoiceOver hears, what lights during a
+/// drag, and how the list answers the keyboard and mouse.
 @MainActor
 @Suite(.serialized) struct LookTests {
     func tray() -> EmptyStateView {
@@ -14,102 +14,45 @@ import ZipboyKit
         return view
     }
 
-    @Test func traysMarchOnlyWhenMotionIsAllowed() {
-        defer { Theme.reduceMotion = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion } }
+    @Test func theDropAreaLightsInTheAccentOnlyWhileADropWaits() {
+        let view = tray()
+        let rest = view.outlineColor
+        view.highlighted = true
+        var accent: CGColor?
+        view.effectiveAppearance.performAsCurrentDrawingAppearance { accent = NSColor.controlAccentColor.cgColor }
+        #expect(view.outlineColor == accent)
+        view.highlighted = false
+        #expect(view.outlineColor == rest)
 
-        Theme.reduceMotion = { false }
-        let moving = tray()
-        moving.highlighted = true
-        #expect(moving.isAnimating)
-        moving.highlighted = false
-        #expect(!moving.isAnimating)
-
-        Theme.reduceMotion = { true }
-        let still = tray()
-        still.highlighted = true
-        #expect(!still.isAnimating)
+        // Searching or loading isn't somewhere to drop, so nothing lights.
+        view.mode = .noResults("x")
+        view.highlighted = true
+        #expect(view.outlineColor == rest)
     }
 
     @Test func voiceOverHearsEachState() {
         let view = tray()
         #expect(view.accessibilityRole() == .group)
-        #expect(view.accessibilityLabel()?.contains("Drop files here") == true)
+        #expect(view.accessibilityLabel()?.contains("Drop Files Here") == true)
         #expect(view.chooseButton.accessibilityLabel() == "Choose files to add")
-        #expect(view.chooseButton.prominent)
+        #expect(view.chooseButton.isProminent)
 
         view.mode = .loading(0.42)
         #expect(view.accessibilityLabel()?.contains("Unzipping") == true)
-        let zipper = view.subviews.flatMap(\.subviews).compactMap { $0 as? ZipperProgressView }.first
-        #expect(zipper?.accessibilityRole() == .progressIndicator)
-        #expect(zipper?.accessibilityValue() as? String == "42 percent")
+        let bar = view.subviews.flatMap(\.subviews).compactMap { $0 as? NSProgressIndicator }.first
+        #expect(bar?.doubleValue == 0.42)
+        #expect(bar?.accessibilityValue() as? String == "42 percent")
 
-        view.mode = .noResults
-        #expect(view.accessibilityLabel()?.contains("No matches") == true)
+        view.mode = .noResults("tax")
+        #expect(view.accessibilityLabel()?.contains("No Results for “tax”") == true)
     }
 
-    /// WCAG contrast between `text` drawn over `fill` over `ground`, in one appearance.
-    func contrast(_ text: NSColor, on fill: NSColor?, over ground: NSColor, _ name: NSAppearance.Name) -> Double {
-        var result = 0.0
-        NSAppearance(named: name)!.performAsCurrentDrawingAppearance {
-            func rgba(_ color: NSColor) -> [Double] {
-                let c = color.usingColorSpace(.sRGB)!
-                return [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map(Double.init)
-            }
-            func over(_ top: [Double], _ bottom: [Double]) -> [Double] {
-                (0..<3).map { top[$0] * top[3] + bottom[$0] * (1 - top[3]) } + [1]
-            }
-            func luminance(_ c: [Double]) -> Double {
-                let lin = c.prefix(3).map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
-                return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
-            }
-            var back = rgba(ground)
-            if let fill { back = over(rgba(fill), back) }
-            let front = over(rgba(text), back)
-            let (a, b) = (luminance(front), luminance(back))
-            result = (max(a, b) + 0.05) / (min(a, b) + 0.05)
-        }
-        return result
-    }
-
-    @Test func selectedRowsKeepTheirTextReadable() {
-        for look in [NSAppearance.Name.aqua, .darkAqua] {
-            let text = contrast(.labelColor, on: Theme.selection, over: .controlBackgroundColor, look)
-            #expect(text >= 4.5, "\(look.rawValue): \(text)")
-        }
-        // Secondary text would fall under 4.5:1 on the tint, so a selected row draws it as primary.
-        let row = ArchiveRowView()
-        let cell = NSTableCellView()
-        cell.identifier = NSUserInterfaceItemIdentifier("size")
-        cell.textField = NSTextField(labelWithString: "1 KB")
-        cell.addSubview(cell.textField!)
-        row.addSubview(cell)
-        row.isSelected = true
-        #expect(cell.textField?.textColor == .labelColor)
-        row.isSelected = false
-        #expect(cell.textField?.textColor == .secondaryLabelColor)
-        #expect(row.interiorBackgroundStyle == .normal)
-    }
-
-    @Test func inkReadsOnNeonAndTheAccentReadsOnTheWindow() {
-        for look in [NSAppearance.Name.aqua, .darkAqua] {
-            let ink = contrast(Theme.ink, on: Theme.neon, over: .windowBackgroundColor, look)
-            #expect(ink >= 4.5, "ink on neon, \(look.rawValue): \(ink)")
-            // Strokes and glyphs are non-text, so 3:1.
-            let accent = contrast(Theme.accent, on: nil, over: .windowBackgroundColor, look)
-            #expect(accent >= 3, "accent, \(look.rawValue): \(accent)")
-        }
-    }
-
-    @Test func theAccentFollowsOnlyWhenThePersonHasNotChosenOne() {
-        let multicolor = Theme.accentDefaults(over: [:])
-        #expect(multicolor["AppleAccentColor"] as? Int == Theme.systemGreen)
-        #expect(multicolor["AppleHighlightColor"] != nil)
-
-        #expect(Theme.accentDefaults(over: ["AppleAccentColor": 4]).isEmpty)
-
-        let ownHighlight = Theme.accentDefaults(over: ["AppleHighlightColor": "1 1 0 Yellow"])
-        #expect(ownHighlight["AppleAccentColor"] as? Int == Theme.systemGreen)
-        #expect(ownHighlight["AppleHighlightColor"] == nil)
+    @Test func theListDrawsTheSystemSelection() async throws {
+        let (doc, browser, _) = try await browsing(["one.txt"])
+        defer { doc.close() }
+        browser.outline.selectRowIndexes([0], byExtendingSelection: false)
+        let row = try #require(browser.outline.rowView(atRow: 0, makeIfNecessary: true))
+        #expect(type(of: row) == NSTableRowView.self)
     }
 
     @Test func infoTableRowsShareTheirEdges() {
@@ -147,22 +90,9 @@ import ZipboyKit
         try await doc.add([file], into: "") { _ in .keepBoth }
         let inspector = PreviewViewController()
         inspector.show([], archive: doc)
-        #expect(inspector.primary.prominent)
-        #expect(!inspector.secondary.prominent)
-        #expect(inspector.primary.accessibilityLabel() == "Extract All")
-    }
-
-    @Test func theProminentButtonGoesQuietInABackgroundWindow() {
-        let alone = ActionButton("Extract", action: nil, prominent: true)
-        #expect(alone.isLit)
-        #expect(!ActionButton("Verify", action: nil, prominent: false).isLit)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered,
-            defer: true)
-        window.contentView?.addSubview(alone)
-        #expect(!window.isMainWindow)
-        #expect(!alone.isLit)
+        #expect(inspector.primary.isProminent)
+        #expect(!inspector.secondary.isProminent)
+        #expect(inspector.primary.title == "Extract All")
     }
 
     @Test func theInspectorToggleSaysWhatItWillDo() throws {
@@ -382,4 +312,146 @@ import ZipboyKit
         try await Task.sleep(for: .milliseconds(120))
         #expect(browser.outline.isItemExpanded(folderNode))
     }
+
+    /// An archive holding `names` as small files at its top level, shown in a list inside a window.
+    func browsing(_ names: [String]) async throws -> (ArchiveDocument, BrowserViewController, URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("look-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for name in names { try Data(name.utf8).write(to: dir.appendingPathComponent(name)) }
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        try await doc.add(names.map { dir.appendingPathComponent($0) }, into: "") { _ in .keepBoth }
+        let browser = BrowserViewController()
+        browser.document = doc
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
+            defer: true)
+        window.contentView = browser.view
+        // As the window controller does, so edits reach this list rather than the window's own.
+        doc.onChange = { browser.reload() }
+        browser.reload()
+        return (doc, browser, dir)
+    }
+
+    @Test func typingANameFindsItsRow() async throws {
+        let (doc, browser, _) = try await browsing(["alpha.txt", "beta.txt"])
+        defer { doc.close() }
+        let outline = browser.outline
+        let node = try #require(outline.item(atRow: 1) as? Node)
+        #expect(browser.outlineView(outline, typeSelectStringFor: outline.tableColumns[0], item: node) == "beta.txt")
+        #expect(browser.outlineView(outline, typeSelectStringFor: outline.tableColumns[3], item: node) == nil)
+    }
+
+    @Test func escapeCancelsARename() async throws {
+        let (doc, browser, _) = try await browsing(["keep.txt"])
+        defer { doc.close() }
+        let cell = try #require(browser.outline.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTableCellView)
+        let field = try #require(cell.textField)
+        field.stringValue = "half typed"
+        let handled = browser.control(
+            field, textView: NSTextView(), doCommandBy: #selector(NSResponder.cancelOperation(_:)))
+        #expect(handled)
+        #expect(field.stringValue == "keep.txt")
+        #expect(doc.tree?.children.map(\.name) == ["keep.txt"])
+        // Other commands, such as Return, still go to the field.
+        #expect(!browser.control(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))))
+    }
+
+    @Test func rightClickingBlankSpaceIsAboutTheArchive() async throws {
+        let (doc, browser, _) = try await browsing(["a.txt"])
+        defer { doc.close() }
+        let menu = NSMenu()
+        browser.outline.selectRowIndexes([0], byExtendingSelection: false)
+        browser.fillContextMenu(menu, onBlank: false)
+        #expect(menu.items.contains { $0.title == "Rename" })
+
+        browser.fillContextMenu(menu, onBlank: true)
+        #expect(browser.selection.isEmpty)
+        #expect(menu.items.contains { $0.title == "Add Files…" })
+        #expect(!menu.items.contains { $0.title == "Rename" })
+    }
+
+    @Test func addedItemsAreShownWhereTheyLanded() async throws {
+        let (doc, browser, dir) = try await browsing(["same.txt"])
+        defer { doc.close() }
+        // The second copy is renamed to keep both, and it's that name that comes back.
+        let added = try await doc.add([dir.appendingPathComponent("same.txt")], into: "") { _ in .keepBoth }
+        #expect(added.count == 1)
+        #expect(added != ["same.txt"])
+        #expect(doc.tree?.find(added[0]) != nil)
+
+        let extra = dir.appendingPathComponent("extra.txt")
+        try Data("e".utf8).write(to: extra)
+        await browser.add([extra], into: "")?.value
+        #expect(browser.selection.map(\.path) == ["extra.txt"])
+    }
+
+    @Test func aDropLightsTheListOnlyWhenItWouldBeAccepted() async throws {
+        let (doc, browser, dir) = try await browsing(["top.txt"])
+        defer { doc.close() }
+        let outline = browser.outline
+
+        let outside = FakeDrag(files: [dir.appendingPathComponent("top.txt")], source: nil)
+        #expect(browser.outlineView(outline, validateDrop: outside, proposedItem: nil, proposedChildIndex: -1) == .copy)
+        #expect(outline.rootDropGlow)
+
+        // Moving a top-level item to the top level goes nowhere, so nothing lights.
+        browser.dragged = ["top.txt"]
+        let inside = FakeDrag(files: [dir.appendingPathComponent("top.txt")], source: outline)
+        #expect(browser.outlineView(outline, validateDrop: inside, proposedItem: nil, proposedChildIndex: -1) == [])
+        #expect(!outline.rootDropGlow)
+    }
+
+    @Test func theInspectorTakesFilesFromOutsideOnly() {
+        let view = FileDropView()
+        var hovering = false
+        var dropped: [URL] = []
+        view.onHover = { hovering = $0 }
+        view.onDrop = { dropped = $0 }
+        let file = URL(fileURLWithPath: "/tmp/dropped.txt")
+
+        let outside = FakeDrag(files: [file], source: nil)
+        #expect(view.draggingEntered(outside) == .copy)
+        #expect(hovering)
+        #expect(view.performDragOperation(outside))
+        #expect(dropped == [file])
+        view.draggingExited(outside)
+        #expect(!hovering)
+
+        let fromList = FakeDrag(files: [file], source: NSOutlineView())
+        #expect(view.draggingEntered(fromList) == [])
+        #expect(!hovering)
+    }
+}
+
+/// A drag carrying file URLs, for exercising drop handling without a mouse.
+@MainActor
+final class FakeDrag: NSObject, @preconcurrency NSDraggingInfo {
+    let draggingPasteboard = NSPasteboard(name: .init("zipboy-tests-\(UUID().uuidString)"))
+    let draggingSource: Any?
+
+    init(files: [URL], source: Any?) {
+        draggingSource = source
+        super.init()
+        draggingPasteboard.clearContents()
+        draggingPasteboard.writeObjects(files.map { $0 as NSURL })
+    }
+
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggingSourceOperationMask: NSDragOperation { .every }
+    var draggingLocation: NSPoint { .zero }
+    var draggedImageLocation: NSPoint { .zero }
+    var draggedImage: NSImage? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    func enumerateDraggingItems(
+        options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass],
+        searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+        using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
+    ) {}
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func resetSpringLoading() {}
 }
