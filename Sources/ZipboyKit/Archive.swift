@@ -294,11 +294,8 @@ public enum Archive {
         var folders: [(URL, Date)] = []
         var deflate64Seen: [String: Int] = [:]
         var entryCount = 0
-        var totalExtractedBytes: Int64 = 0
-        let archiveFileBytes = max(Int64(total), 4096)
+        var expansion = ExpansionGuard(archiveBytes: Int64(total))
         let maxEntries = 250_000
-        let maxRatioThresholdBytes: Int64 = 64 << 20
-        let maxRatio: Int64 = 1000
         let fm = FileManager.default
         var buffer = [UInt8](repeating: 0, count: chunk)
         var entry: OpaquePointer?
@@ -399,11 +396,7 @@ public enum Archive {
                         throw ArchiveError.suspiciousArchive(
                             "The entry “\(path)” declares a negative file size and cannot be trusted.")
                     }
-                    if size > maxRatioThresholdBytes, size / archiveFileBytes > maxRatio {
-                        throw ArchiveError.suspiciousArchive(
-                            "The entry “\(path)” expands to more than 1,000× the archive’s size and was stopped to protect against a decompression bomb."
-                        )
-                    }
+                    if sizeSet { try expansion.admit(declared: size, path: path) }
                     if size > 0 { try reserve(size, needed: size) }
                     try? fm.removeItem(at: url)
                     guard fm.createFile(atPath: url.path, contents: nil) else {
@@ -426,9 +419,13 @@ public enum Archive {
                                 if !encrypted, isZip(a), written == 0, isDeflate64Problem(a) {
                                     let occ = deflate64Seen[raw, default: 0]
                                     deflate64Seen[raw] = occ + 1
+                                    let before = archive_filter_bytes(a, -1)
                                     try Deflate64.extract(
                                         named: raw, occurrence: occ, from: archive, to: out,
-                                        budget: &budget, capacity: capacity, report: report)
+                                        budget: &budget, capacity: capacity, report: report,
+                                        admit: { bytes, consumed in
+                                            try expansion.add(bytes, consumed: before + Int64(consumed))
+                                        })
                                     break
                                 }
                                 if encrypted { throw ArchiveError.wrongPassword }
@@ -440,13 +437,7 @@ public enum Archive {
                                     "The entry “\(path)” expanded past its declared size and was stopped."
                                 )
                             }
-                            if totalExtractedBytes + chunkBytes > maxRatioThresholdBytes,
-                                (totalExtractedBytes + chunkBytes) / archiveFileBytes > maxRatio
-                            {
-                                throw ArchiveError.suspiciousArchive(
-                                    "This archive expands to more than 1,000× its compressed size and was stopped to protect against a decompression bomb."
-                                )
-                            }
+                            try expansion.add(chunkBytes, consumed: archive_filter_bytes(a, -1))
                             try reserve(chunkBytes, needed: max(size, written + chunkBytes))
                             do {
                                 try out.write(contentsOf: buffer[0..<n])
@@ -456,7 +447,6 @@ public enum Archive {
                                     needed: max(size, written + chunkBytes), available: capacity() ?? 0)
                             }
                             written += chunkBytes
-                            totalExtractedBytes += chunkBytes
                             budget = budget.map { $0 - chunkBytes }
                             try report()
                         }
@@ -483,6 +473,51 @@ public enum Archive {
             try? fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
         }
         return summary
+    }
+
+    /// Tells a decompression bomb from a file that merely compresses well. Ratio alone can't: Deflate
+    /// makes about 1,030:1 of zeros, so a blank disk image looks exactly like a bomb's payload, and a
+    /// flat 1,000:1 limit both refused that image and let through any bomb with a little noise in it.
+    /// What separates them is how much they cost, so the guard counts the bytes written.
+    struct ExpansionGuard {
+        /// Up to this much output, no ratio is refused. It is the most item 0041 lets a bomb cost, and
+        /// far above what people really zip at extreme ratios: blank disk images, zeroed swap, sparse
+        /// databases. Free space is still checked against every declared size below it.
+        static let floor: Int64 = 1_000_000_000
+        /// Past the floor, more than this many bytes out for each byte in is a bomb. Text and logs
+        /// compress 3–20:1 and rarely pass 50:1 even under xz, so real data a gigabyte and up stays
+        /// well under it, while a bomb is built to sit near its format's ceiling (1,030:1 for Deflate,
+        /// far more for bzip2 and xz).
+        static let ratio: Int64 = 100
+
+        let archiveBytes: Int64
+        private(set) var expanded: Int64 = 0
+
+        init(archiveBytes: Int64) {
+            self.archiveBytes = max(archiveBytes, 1)
+        }
+
+        /// Refuses, before anything is written, an entry whose declared size the whole archive couldn't
+        /// produce within the ratio: no placement of its compressed bytes makes that honest.
+        func admit(declared: Int64, path: String) throws {
+            let (after, overflow) = expanded.addingReportingOverflow(declared)
+            guard overflow || (after > Self.floor && after / archiveBytes > Self.ratio) else { return }
+            throw ArchiveError.suspiciousArchive(
+                "The entry “\(path)” would expand to more than \(Self.ratio)× the archive’s size and was stopped to protect against a decompression bomb."
+            )
+        }
+
+        /// Counts `bytes` about to be written, `consumed` being the compressed bytes read so far. The
+        /// running ratio catches a bomb whose declared sizes hide behind padding later in the file.
+        mutating func add(_ bytes: Int64, consumed: Int64) throws {
+            let after = expanded + bytes
+            if after > Self.floor, after / max(consumed, 1) > Self.ratio {
+                throw ArchiveError.suspiciousArchive(
+                    "This archive expanded past \(ByteCountFormatter.string(fromByteCount: Self.floor, countStyle: .file)) at more than \(Self.ratio)× its compressed size and was stopped to protect against a decompression bomb."
+                )
+            }
+            expanded = after
+        }
     }
 
     /// Zips the contents of `root` into `destination`, leaving out Finder metadata. Writes to a sibling
@@ -690,9 +725,10 @@ public enum Archive {
                             let devNull = try FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null"))
                             defer { try? devNull.close() }
                             var budget: Int64? = nil
+                            // Verifying writes nothing, so there is no disk for a bomb to fill.
                             try Deflate64.extract(
                                 named: raw, occurrence: occ, from: archive, to: devNull,
-                                budget: &budget, capacity: { nil }, report: report)
+                                budget: &budget, capacity: { nil }, report: report, admit: { _, _ in })
                             readBytes = max(0, size)
                             break
                         }

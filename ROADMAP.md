@@ -33,7 +33,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ## v0.2 — Saves in seconds
 
-`####······` 40% · 6 of 15 done · due 2026-12-18
+`#####·····` 44% · 7 of 16 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
@@ -57,6 +57,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [x] `0064` Add Settings window and sensible defaults <sup>feature · p1 · shell</sup>
 - [x] `0065` Implement reference archive feature parity: ZipCatalog, ZipWriter, checksums, verification, export, encoding, nested archives, and Finder Services <sup>feature · p0 · archive</sup>
 - [x] `0068` Saving after an edit mid-save keeps the edit, and delta saves keep extra fields <sup>bug · p0 · archive</sup>
+- [x] `0069` Hostile ZIPs can't crash the reader or slip past the bomb guards <sup>bug · p0 · archive</sup>
 
 ## v0.3 — Opens instantly
 

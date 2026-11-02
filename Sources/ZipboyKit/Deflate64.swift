@@ -39,9 +39,12 @@ enum Deflate64 {
 
     /// Finds the `occurrence`-th Deflate64 entry named `rawName` in `zipURL`, decodes it into `out`,
     /// checks its CRC-32 and uncompressed length, and updates `budget` and `report` as chunks land.
+    /// Before each window is written, `admit` hears its size and the compressed bytes read so far, and
+    /// throws to stop a bomb; an entry that outgrows its declared size stops at that point too.
     static func extract(
         named rawName: String, occurrence: Int, from zipURL: URL, to out: FileHandle,
-        budget: inout Int64?, capacity: () -> Int64?, report: () throws -> Void
+        budget: inout Int64?, capacity: () -> Int64?, report: () throws -> Void,
+        admit: (_ bytes: Int64, _ consumed: UInt64) throws -> Void
     ) throws {
         let slice = try locateEntry(named: rawName, occurrence: occurrence, in: zipURL)
         let reader = try FileHandle(forReadingFrom: zipURL)
@@ -56,6 +59,11 @@ enum Deflate64 {
 
         func flush(_ count: Int) throws {
             guard count > 0 else { return }
+            guard UInt64(count) <= slice.uncompressedSize - totalOut else {
+                throw ArchiveError.suspiciousArchive(
+                    "The entry “\(rawName)” expanded past its declared size and was stopped.")
+            }
+            try admit(Int64(count), slice.compressedSize - bits.remaining)
             if let known = budget, Int64(count) > known {
                 let fresh = capacity() ?? known
                 budget = fresh
@@ -234,7 +242,7 @@ enum Deflate64 {
             }
         }
 
-        guard cdOffset + cdSize <= fileSize else {
+        guard cdOffset <= fileSize, cdSize <= fileSize - cdOffset else {
             throw ArchiveError.unreadable("Corrupt ZIP central directory.")
         }
         try handle.seek(toOffset: cdOffset)
@@ -284,6 +292,9 @@ enum Deflate64 {
             let entryName = Archive.decodeZipName(nameData)
             if entryMethod == method, entryName == rawName {
                 if seen == occurrence {
+                    guard fileSize >= 30, localOffset <= fileSize - 30 else {
+                        throw ArchiveError.unreadable("Corrupt ZIP local file header.")
+                    }
                     try handle.seek(toOffset: localOffset)
                     guard let local = try handle.read(upToCount: 30), local.count == 30,
                         local.u32(at: 0) == 0x0403_4B50
@@ -293,7 +304,7 @@ enum Deflate64 {
                     let localNameLen = UInt64(local.u16(at: 26))
                     let localExtraLen = UInt64(local.u16(at: 28))
                     let dataOffset = localOffset + 30 + localNameLen + localExtraLen
-                    guard dataOffset + compSize <= fileSize else {
+                    guard dataOffset <= fileSize, compSize <= fileSize - dataOffset else {
                         throw ArchiveError.unreadable("Truncated Deflate64 entry.")
                     }
                     return EntrySlice(
