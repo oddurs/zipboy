@@ -13,6 +13,9 @@ public enum ArchiveError: LocalizedError, Equatable {
     case unsupportedEncryption(format: String)
     /// The archive exhibits decompression-bomb or spoofed-size characteristics.
     case suspiciousArchive(String)
+    /// Only ZIP can be written with a password, so exporting an encrypted archive as anything else would
+    /// leave it unprotected.
+    case cantEncrypt(ExportFormat)
 
     public struct UserExplanation: Equatable, Sendable {
         public let title: String
@@ -39,6 +42,8 @@ public enum ArchiveError: LocalizedError, Equatable {
             "There isn’t enough space on the disk. It needs at least \(Self.size(needed)), and \(Self.size(available)) is free."
         case .suspiciousArchive(let reason):
             reason
+        case .cantEncrypt(let format):
+            "A .\(format.fileExtension) archive can’t keep a password. Export as ZIP to keep it protected."
         }
     }
 
@@ -74,6 +79,12 @@ public enum ArchiveError: LocalizedError, Equatable {
                 return UserExplanation(
                     title: "\(label) was stopped for safety.",
                     message: reason
+                )
+            case .cantEncrypt(let format):
+                return UserExplanation(
+                    title: "A .\(format.fileExtension) archive can’t keep \(label)’s password.",
+                    message:
+                        "Exporting it as .\(format.fileExtension) would leave its contents unprotected. Choose ZIP to keep the password."
                 )
             case .cancelled:
                 return UserExplanation(title: "Cancelled.", message: "")
@@ -262,6 +273,7 @@ public enum Archive {
     ) throws -> ExtractSummary {
         let capacity = capacity ?? { freeSpace(on: root) }
         useUTF8Names()
+        let utf8Flagged = utf8FlaggedNames(in: archive, encoding: encoding)
         guard let a = archive_read_new() else { throw ArchiveError.unreadable("Out of memory.") }
         defer { archive_read_free(a) }
         archive_read_support_filter_all(a)
@@ -328,7 +340,7 @@ public enum Archive {
             }
             if encrypted && password == nil { throw ArchiveError.passwordRequired }
 
-            let raw = name(of: entry, in: a, encoding: encoding)
+            let raw = name(of: entry, in: a, encoding: encoding, utf8Flagged: utf8Flagged)
             guard let path = EntryPath.sanitized(raw), !hasLinkAbove(path, in: root) else {
                 summary.skipped.append(raw)
                 archive_read_data_skip(a)
@@ -421,7 +433,7 @@ public enum Archive {
                                     deflate64Seen[raw] = occ + 1
                                     let before = archive_filter_bytes(a, -1)
                                     try Deflate64.extract(
-                                        named: raw, occurrence: occ, from: archive, to: out,
+                                        named: raw, occurrence: occ, from: archive, encoding: encoding, to: out,
                                         budget: &budget, capacity: capacity, report: report,
                                         admit: { bytes, consumed in
                                             try expansion.add(bytes, consumed: before + Int64(consumed))
@@ -539,15 +551,7 @@ public enum Archive {
         try writeZipFile(
             from: root, to: staging, password: password, compressionLevel: compressionLevel, progress: progress)
 
-        let fd = open(staging.path, O_RDONLY)
-        if fd >= 0 {
-            _ = fsync(fd)
-            close(fd)
-        }
-        guard rename(staging.path, destination.path) == 0 else {
-            let reason = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO).localizedDescription
-            throw ArchiveError.unwritable(reason)
-        }
+        try commit(staging, to: destination)
     }
 
     private static func writeZipFile(
@@ -645,6 +649,7 @@ public enum Archive {
         progress: ((Double) -> Bool)? = nil
     ) throws -> VerificationReport {
         useUTF8Names()
+        let utf8Flagged = utf8FlaggedNames(in: archive, encoding: encoding)
         guard let a = archive_read_new() else { throw ArchiveError.unreadable("Out of memory.") }
         defer { archive_read_free(a) }
         archive_read_support_filter_all(a)
@@ -690,7 +695,7 @@ public enum Archive {
             }
             if encrypted && password == nil { throw ArchiveError.passwordRequired }
 
-            let raw = name(of: entry, in: a, encoding: encoding)
+            let raw = name(of: entry, in: a, encoding: encoding, utf8Flagged: utf8Flagged)
             guard let path = EntryPath.sanitized(raw) else {
                 verification.skipped.append(raw)
                 archive_read_data_skip(a)
@@ -727,7 +732,7 @@ public enum Archive {
                             var budget: Int64? = nil
                             // Verifying writes nothing, so there is no disk for a bomb to fill.
                             try Deflate64.extract(
-                                named: raw, occurrence: occ, from: archive, to: devNull,
+                                named: raw, occurrence: occ, from: archive, encoding: encoding, to: devNull,
                                 budget: &budget, capacity: { nil }, report: report, admit: { _, _ in })
                             readBytes = max(0, size)
                             break
@@ -749,7 +754,8 @@ public enum Archive {
     }
 
     /// Exports the contents of `root` to `destination` in the requested `format` (`.zip`, `.tar.gz`,
-    /// `.tar.xz`, `.tar`, or `.7z`) atomically via a staging file.
+    /// `.tar.xz`, `.tar`, or `.7z`) atomically via a staging file. A password encrypts a ZIP; any other
+    /// format throws `cantEncrypt`, since libarchive writes those only in plaintext.
     public static func export(
         from root: URL,
         to destination: URL,
@@ -764,6 +770,7 @@ public enum Archive {
                 compressionLevel: compressionLevel, progress: progress)
             return
         }
+        if let password, !password.isEmpty { throw ArchiveError.cantEncrypt(format) }
         useUTF8Names()
         let fm = FileManager.default
         let parent = destination.deletingLastPathComponent()
@@ -848,15 +855,7 @@ public enum Archive {
         }
         try check(archive_write_close(a), a)
 
-        let fd = open(staging.path, O_RDONLY)
-        if fd >= 0 {
-            _ = fsync(fd)
-            close(fd)
-        }
-        guard rename(staging.path, destination.path) == 0 else {
-            let reason = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO).localizedDescription
-            throw ArchiveError.unwritable(reason)
-        }
+        try commit(staging, to: destination)
     }
 
     /// Every path under `root`, relative and sorted so parents come before children, without Finder
@@ -874,6 +873,32 @@ public enum Archive {
         }
         try walk("")
         return paths
+    }
+
+    /// Moves a finished `staging` file over `destination` so that a power cut leaves either the old
+    /// archive or the new one: the file reaches the disk before the rename, and the rename before this
+    /// returns.
+    static func commit(_ staging: URL, to destination: URL) throws {
+        try flush(staging, required: true)
+        guard rename(staging.path, destination.path) == 0 else { throw unwritable(errno) }
+        // Some volumes can't flush a folder, and a drop box can't be opened to try; the archive itself
+        // is already on the disk by then.
+        try flush(destination.deletingLastPathComponent(), required: false)
+    }
+
+    /// Plain `fsync` on macOS stops at the drive's cache; `F_FULLFSYNC` asks the drive to write it out.
+    /// Volumes that refuse `F_FULLFSYNC`, such as FAT and network shares, get `fsync`, the best they offer.
+    private static func flush(_ url: URL, required: Bool) throws {
+        let fd = open(url.path, O_RDONLY)
+        let flushed = fd >= 0 && (fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0)
+        let code = errno
+        if fd >= 0 { close(fd) }
+        if flushed { return }
+        if required || ![ENOTSUP, EINVAL, EACCES].contains(code) { throw unwritable(code) }
+    }
+
+    private static func unwritable(_ code: Int32) -> ArchiveError {
+        .unwritable(POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO).localizedDescription)
     }
 
     static func freeSpace(on url: URL) -> Int64? {
@@ -930,13 +955,19 @@ public enum Archive {
 
     /// An entry's name as text. ZIPs written without the UTF-8 flag hold either UTF-8, as macOS's own
     /// tools write, or code page 437, as the ZIP specification says and older Windows tools write; bytes
-    /// that aren't valid UTF-8 are read as CP437 rather than shown as "".
+    /// that aren't valid UTF-8 are read as CP437 rather than shown as "". A chosen `encoding` applies
+    /// only to unflagged names, as in `ZipCatalog`, or the catalog's paths would stop matching these.
     private static func name(
-        of entry: OpaquePointer, in a: OpaquePointer, encoding: TextEncoding = .auto
+        of entry: OpaquePointer, in a: OpaquePointer, encoding: TextEncoding = .auto,
+        utf8Flagged: Set<String> = []
     ) -> String {
         if let stored = archive_entry_pathname(entry) {
             let bytes = Data(bytes: stored, count: strlen(stored))
             if encoding != .auto {
+                // libarchive hands a flagged name back decomposed, so it is matched as text, not bytes.
+                if isZip(a), let utf8 = String(data: bytes, encoding: .utf8), utf8Flagged.contains(utf8) {
+                    return utf8
+                }
                 return encoding.decode(bytes)
             }
             if isZip(a) {
@@ -953,8 +984,12 @@ public enum Archive {
         return ""
     }
 
-    static func decodeZipName(_ bytes: Data) -> String {
-        TextEncoding.auto.decode(bytes)
+    /// The names a ZIP flags as UTF-8, which libarchive reads but doesn't report. Only a chosen encoding
+    /// needs them: Automatic reads valid UTF-8 as UTF-8 anyway. Anything the catalog can't read, such as
+    /// a RAR, has no flags, so its names all take the chosen encoding.
+    private static func utf8FlaggedNames(in archive: URL, encoding: TextEncoding) -> Set<String> {
+        guard encoding != .auto, let catalog = try? ZipCatalog.read(from: archive) else { return [] }
+        return Set(catalog.entries.filter(\.usesUTF8Flag).compactMap { String(data: $0.rawName, encoding: .utf8) })
     }
 
     private static func isPasswordProblem(_ a: OpaquePointer) -> Bool {
@@ -971,18 +1006,11 @@ public enum Archive {
     }
 
     /// libarchive converts names through the C locale, which starts out as ASCII-only "C" and would turn
-    /// every non-ASCII name into an error. Also adds Homebrew's tool paths so libarchive's external
-    /// decompression filters (such as zstd and lz4) work when the app is launched from Finder.
+    /// every non-ASCII name into an error.
     private static func useUTF8Names() {
         _ = utf8Locale
     }
     private static let utf8Locale: Void = {
         _ = setlocale(LC_CTYPE, "UTF-8")
-        let current = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        var parts = current.split(separator: ":").map(String.init)
-        for extra in ["/opt/homebrew/bin", "/usr/local/bin"] where !parts.contains(extra) {
-            parts.append(extra)
-        }
-        setenv("PATH", parts.joined(separator: ":"), 1)
     }()
 }

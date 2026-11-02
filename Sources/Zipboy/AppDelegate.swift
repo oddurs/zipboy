@@ -61,14 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let urls =
             pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         guard !urls.isEmpty else { return }
-        do {
-            let output = try Self.compressFiles(urls)
-            if Settings.shared.revealExtractedInFinder {
-                NSWorkspace.shared.activateFileViewerSelecting([output])
-            }
-        } catch let failure {
-            error.pointee = failure.localizedDescription as NSString
-        }
+        runService { [try Self.compressFiles(urls)] }
     }
 
     @objc func extractWithZipboy(
@@ -77,13 +70,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let urls =
             pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         guard !urls.isEmpty else { return }
-        do {
-            let outputs = try Self.extractArchives(urls)
-            if Settings.shared.revealExtractedInFinder, !outputs.isEmpty {
-                NSWorkspace.shared.activateFileViewerSelecting(outputs)
+        runService { try Self.extractArchives(urls) }
+    }
+
+    /// The system waits for a service handler to return, and copying or unpacking a large selection takes
+    /// as long as it takes, so the work runs in the background. A failure is shown here: by the time it
+    /// happens the handler has returned, and its `error` would only have reached the console anyway.
+    @discardableResult
+    func runService(_ work: @escaping @Sendable () throws -> [URL]) -> Task<Void, Never> {
+        Task.detached {
+            do {
+                let outputs = try work()
+                await MainActor.run {
+                    if Settings.shared.revealExtractedInFinder, !outputs.isEmpty {
+                        NSWorkspace.shared.activateFileViewerSelecting(outputs)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    NSApp.activate()
+                    _ = Prompts.makeErrorAlert(for: error).runModal()
+                }
             }
-        } catch let failure {
-            error.pointee = failure.localizedDescription as NSString
         }
     }
 

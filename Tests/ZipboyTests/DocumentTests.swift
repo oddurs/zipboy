@@ -28,6 +28,15 @@ import ZipboyKit
         return document
     }
 
+    @Test func runsFinderServicesOffTheMainThread() async {
+        let ranOnMain = Locked<Bool?>(nil)
+        await AppDelegate().runService {
+            ranOnMain.value = Thread.isMainThread
+            return []
+        }.value
+        #expect(ranOnMain.value == false)
+    }
+
     @Test func opensARarAsANewDocumentSoAutosaveCannotReplaceIt() async throws {
         let fixture = BundleTests.root.appendingPathComponent("Tests/ZipboyKitTests/Fixtures/container.rar")
         let rar = dir.appendingPathComponent("container.rar")

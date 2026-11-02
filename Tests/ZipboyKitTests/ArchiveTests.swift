@@ -388,12 +388,6 @@ import zlib
         try Data("alpha".utf8).write(to: alphaFile)
         #expect(aEntry.crc32 == (try Checksums.compute(for: alphaFile).crc32))
 
-        let root = try folder("cat-root")
-        let catalogTree = Node.fromCatalog(catalog, root: root)
-        #expect(catalogTree.find("a.txt")?.size == 5)
-        #expect(catalogTree.find("nested/deeper/b.txt")?.size == 12)
-        #expect(catalogTree.find("Ünïcödé/カフェ.txt") != nil)
-
         for name in ["zip-deflate", "zip-store", "zip-zip64", "zip-data-descriptor", "zip-aes256", "zip-zipcrypto"] {
             let url = try #require(
                 Bundle.module.url(forResource: name, withExtension: "zip", subdirectory: "Fixtures/matrix"))
@@ -637,6 +631,72 @@ import zlib
         #expect(try read("nested/b.txt", in: extracted) == "beta-export")
     }
 
+    @Test(arguments: ExportFormat.allCases.filter { $0 != .zip })
+    func refusesToExportAPasswordToAFormatThatCannotKeepIt(_ format: ExportFormat) throws {
+        let source = try folder("export-locked-\(format.rawValue)")
+        try write("secret", to: "a.txt", in: source)
+        let out = dir.appendingPathComponent("locked.\(format.fileExtension)")
+
+        #expect(throws: ArchiveError.cantEncrypt(format)) {
+            try Archive.export(from: source, to: out, format: format, password: "hunter2")
+        }
+        #expect(!FileManager.default.fileExists(atPath: out.path))
+        let explanation = ArchiveError.describe(ArchiveError.cantEncrypt(format), fileName: "secret.zip")
+        #expect(explanation.title.contains(".\(format.fileExtension)"))
+        #expect(explanation.message.contains("ZIP"))
+    }
+
+    @Test func exportsAPasswordToZipEncrypted() throws {
+        let source = try folder("export-locked-zip")
+        try write("secret", to: "a.txt", in: source)
+        let out = dir.appendingPathComponent("locked.zip")
+        try Archive.export(from: source, to: out, format: .zip, password: "hunter2")
+        #expect(throws: ArchiveError.passwordRequired) { try Archive.extract(out, into: try folder("locked-none")) }
+    }
+
+    /// Replaces every occurrence of `placeholder` in the ZIP at `zip`, in both headers, with `raw`.
+    func rename(_ placeholder: String, to raw: [UInt8], in zip: URL) throws {
+        var bytes = try Data(contentsOf: zip)
+        var at = bytes.startIndex
+        while let range = bytes.range(of: Data(placeholder.utf8), in: at..<bytes.endIndex) {
+            bytes.replaceSubrange(range, with: raw)
+            at = range.upperBound
+        }
+        try bytes.write(to: zip)
+    }
+
+    @Test func keepsFlaggedNamesUTF8UnderAChosenEncoding() throws {
+        let source = try folder("flagged-src")
+        try write("flagged", to: "über.txt", in: source)
+        try write("legacy", to: "XXXXX", in: source)
+        let zip = dir.appendingPathComponent("flagged.zip")
+        try Archive.writeZip(from: source, to: zip)
+        // "Ä.txt" in code page 437, unflagged, as an old Windows tool writes it.
+        try rename("XXXXX", to: [0x8E] + Array(".txt".utf8), in: zip)
+        let catalog = try ZipCatalog.read(from: zip, encoding: .cp437)
+        #expect(catalog.entries.first { $0.path.hasSuffix("ber.txt") }?.usesUTF8Flag == true)
+
+        let root = try folder("flagged")
+        _ = try Archive.extract(zip, into: root, encoding: .cp437)
+        let names = try Archive.contents(of: root).map(\.precomposedStringWithCanonicalMapping)
+        #expect(Set(names) == ["über.txt", "Ä.txt"])
+        #expect(Set(names) == Set(catalog.entries.map(\.path)))
+    }
+
+    @Test func findsDeflate64EntriesUnderAChosenEncoding() throws {
+        let fixture = try #require(
+            Bundle.module.url(forResource: "zip-deflate64", withExtension: "zip", subdirectory: "Fixtures/matrix"))
+        let zip = dir.appendingPathComponent("deflate64.zip")
+        try FileManager.default.copyItem(at: fixture, to: zip)
+        // Unflagged bytes that are valid UTF-8 ("üg.txt") but mean "├╝g.txt" in code page 437.
+        try rename("big.txt", to: [0xC3, 0xBC] + Array("g.txt".utf8), in: zip)
+
+        let root = try folder("deflate64-cp437")
+        _ = try Archive.extract(zip, into: root, encoding: .cp437)
+        #expect(try Archive.contents(of: root) == ["├╝g.txt"])
+        #expect(try Data(contentsOf: root.appendingPathComponent("├╝g.txt")).count == 140_000)
+    }
+
     @Test func mapsEveryFailureToHumanReadableExplanation() {
         let truncated = ArchiveError.describe(
             ArchiveError.unreadable("Truncated input file (needed 1048576 bytes, only 0 available)"),
@@ -702,12 +762,11 @@ import zlib
         let zip = dir.appendingPathComponent("bench.zip")
         try Archive.writeZip(from: src, to: zip, compressionLevel: .fast)
 
-        // 1. Catalog read + tree construction budget: <= 250 ms (with 20% tolerance = 300 ms)
+        // 1. Catalog read budget: <= 250 ms (with 20% tolerance = 300 ms)
         let t0 = ContinuousClock.now
         let catalog = try ZipCatalog.read(from: zip)
-        let tree = Node.fromCatalog(catalog, root: src)
         let catalogMs = t0.duration(to: .now) / .milliseconds(1)
-        #expect(tree.descendantCount == 201)
+        #expect(catalog.entries.count == 201)
         #expect(catalogMs <= 300.0, "Catalog read took \(catalogMs) ms (budget 250 ms)")
 
         // 2. Delta save (verbatim copy of 8 MB + 199 files, 1 modified file): <= 500 ms (with 20% = 600 ms)

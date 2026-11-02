@@ -588,6 +588,13 @@ final class ArchiveDocument: NSDocument {
         for fmt in ExportFormat.allCases {
             formatPopup.addItem(withTitle: fmt.title)
         }
+        if let password, !password.isEmpty {
+            formatPopup.autoenablesItems = false
+            for (item, format) in zip(formatPopup.itemArray, ExportFormat.allCases) where format != .zip {
+                item.isEnabled = false
+                item.toolTip = "Only a ZIP archive can keep the password."
+            }
+        }
         let stem = source.map(Naming.stem) ?? defaultDraftName()
         panel.nameFieldStringValue = "\(stem).\(ExportFormat.zip.fileExtension)"
         panel.directoryURL = source?.deletingLastPathComponent()
