@@ -367,6 +367,185 @@ import Testing
             #expect(try read("log.txt", in: out) == text)
         }
     }
+
+    @Test func catalogParsesStandardAndMatrixZipsAndMatchesTree() throws {
+        let source = try folder("cat-src")
+        try write("alpha", to: "a.txt", in: source)
+        try write("beta-content", to: "nested/deeper/b.txt", in: source)
+        try write("ünicode", to: "Ünïcödé/カフェ.txt", in: source)
+        let zip = dir.appendingPathComponent("catalog.zip")
+        try Archive.writeZip(from: source, to: zip)
+
+        let catalog = try ZipCatalog.read(from: zip)
+        #expect(!catalog.isEncrypted)
+        let paths = Set(catalog.entries.filter { !$0.isDirectory }.map(\.path))
+        #expect(paths == ["a.txt", "nested/deeper/b.txt", "Ünïcödé/カフェ.txt"])
+
+        let aEntry = try #require(catalog.entries.first { $0.path == "a.txt" })
+        #expect(aEntry.uncompressedSize == 5)
+        let alphaFile = dir.appendingPathComponent("alpha-check.txt")
+        try Data("alpha".utf8).write(to: alphaFile)
+        #expect(aEntry.crc32 == (try Checksums.compute(for: alphaFile).crc32))
+
+        let root = try folder("cat-root")
+        let catalogTree = Node.fromCatalog(catalog, root: root)
+        #expect(catalogTree.find("a.txt")?.size == 5)
+        #expect(catalogTree.find("nested/deeper/b.txt")?.size == 12)
+        #expect(catalogTree.find("Ünïcödé/カフェ.txt") != nil)
+
+        for name in ["zip-deflate", "zip-store", "zip-zip64", "zip-data-descriptor", "zip-aes256", "zip-zipcrypto"] {
+            let url = try #require(
+                Bundle.module.url(forResource: name, withExtension: "zip", subdirectory: "Fixtures/matrix"))
+            let parsed = try ZipCatalog.read(from: url)
+            #expect(!parsed.entries.isEmpty, "\(name).zip")
+            if name.contains("aes") || name.contains("zipcrypto") {
+                #expect(parsed.isEncrypted)
+            }
+        }
+
+        // Truncated or corrupt files must be rejected by ZipCatalog.
+        let truncated = dir.appendingPathComponent("truncated.zip")
+        let fullBytes = try Data(contentsOf: zip)
+        try fullBytes.prefix(fullBytes.count - 10).write(to: truncated)
+        #expect(throws: ArchiveError.self) {
+            _ = try ZipCatalog.read(from: truncated)
+        }
+    }
+
+    @Test func zipWriterCopiesUnchangedEntriesByteForByteAndUpdatesEditedOnes() throws {
+        let source = try folder("writer-src")
+        let payloadA = Data((0..<16384).map { UInt8(($0 * 37) & 0xff) })
+        let payloadB = Data("unchanged-renamed-file-payload-1234567890".utf8)
+        try payloadA.write(to: source.appendingPathComponent("keep.bin"))
+        try payloadB.write(to: source.appendingPathComponent("oldname.txt"))
+        try write("will-be-replaced", to: "edit.txt", in: source)
+
+        let originalZip = dir.appendingPathComponent("original.zip")
+        try Archive.writeZip(from: source, to: originalZip, compressionLevel: .best)
+
+        let catalog = try ZipCatalog.read(from: originalZip)
+        let keepEntry = try #require(catalog.entries.first { $0.path == "keep.bin" })
+        let renameEntry = try #require(catalog.entries.first { $0.path == "oldname.txt" })
+
+        let originalFile = try FileHandle(forReadingFrom: originalZip)
+        let origRange = try ZipCatalog.payloadRange(in: originalFile, for: keepEntry)
+        try originalFile.seek(toOffset: origRange.offset)
+        let originalCompressedKeep = try #require(
+            try originalFile.read(upToCount: Int(origRange.length)))
+        try originalFile.close()
+
+        let workspace = try folder("writer-ws")
+        try write("brand-new-content", to: "edit.txt", in: workspace)
+        try write("added-later", to: "folder/added.txt", in: workspace)
+
+        let updatedZip = dir.appendingPathComponent("updated.zip")
+        try ZipWriter.write(
+            items: [
+                .verbatim(keepEntry, newPath: nil),
+                .verbatim(renameEntry, newPath: "sub/newname.txt"),
+                .workspace(url: workspace.appendingPathComponent("edit.txt"), path: "edit.txt"),
+                .workspace(url: workspace.appendingPathComponent("folder/added.txt"), path: "folder/added.txt"),
+            ],
+            sourceZip: originalZip,
+            to: updatedZip,
+            compressionLevel: .balanced
+        )
+
+        let (testStatus, out) = try run("/usr/bin/unzip", ["-t", updatedZip.path])
+        #expect(testStatus == 0, "\(out)")
+
+        let updatedCatalog = try ZipCatalog.read(from: updatedZip)
+        let updatedKeep = try #require(updatedCatalog.entries.first { $0.path == "keep.bin" })
+        #expect(updatedKeep.crc32 == keepEntry.crc32)
+        #expect(updatedKeep.compressedSize == keepEntry.compressedSize)
+
+        let updatedFile = try FileHandle(forReadingFrom: updatedZip)
+        let updRange = try ZipCatalog.payloadRange(in: updatedFile, for: updatedKeep)
+        try updatedFile.seek(toOffset: updRange.offset)
+        let updatedCompressedKeep = try #require(
+            try updatedFile.read(upToCount: Int(updRange.length)))
+        try updatedFile.close()
+        #expect(updatedCompressedKeep == originalCompressedKeep)
+
+        let extracted = try folder("writer-extracted")
+        _ = try Archive.extract(updatedZip, into: extracted)
+        #expect(try Data(contentsOf: extracted.appendingPathComponent("keep.bin")) == payloadA)
+        #expect(try Data(contentsOf: extracted.appendingPathComponent("sub/newname.txt")) == payloadB)
+        #expect(try read("edit.txt", in: extracted) == "brand-new-content")
+        #expect(try read("folder/added.txt", in: extracted) == "added-later")
+    }
+
+    @Test func computesCRC32AndSHA256Checksums() throws {
+        let file = dir.appendingPathComponent("check.txt")
+        try Data("123456789".utf8).write(to: file)
+        let result = try Checksums.compute(for: file)
+        #expect(result.crc32 == 0xcbf4_3926)
+        #expect(result.crc32Hex == "CBF43926")
+        #expect(result.sha256Hex == "15e2b0d3c33891ebb0f1ef609ec419420c20e320ce94c65fbc8c3312448eb225")
+    }
+
+    @Test func detectsAndDecodesLegacyFilenameEncodings() throws {
+        // Shift-JIS for "日本語.txt"
+        let shiftJISBytes: [UInt8] = [0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea, 0x2e, 0x74, 0x78, 0x74]
+        #expect(TextEncoding.auto.decode(Data(shiftJISBytes)) == "日本語.txt")
+        #expect(TextEncoding.shiftJIS.decode(Data(shiftJISBytes)) == "日本語.txt")
+
+        let sjisZip = try zip(namedBy: shiftJISBytes)
+        let sjisOut = try folder("sjis-out")
+        _ = try Archive.extract(sjisZip, into: sjisOut, encoding: .shiftJIS)
+        #expect(try Archive.contents(of: sjisOut) == ["日本語.txt"])
+
+        // Windows-1251 for "Привет.txt"
+        let win1251Bytes: [UInt8] = [0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x2e, 0x74, 0x78, 0x74]
+        #expect(TextEncoding.windows1251.decode(Data(win1251Bytes)) == "Привет.txt")
+        let cyrZip = try zip(namedBy: win1251Bytes)
+        let cyrOut = try folder("cyr-out")
+        _ = try Archive.extract(cyrZip, into: cyrOut, encoding: .windows1251)
+        #expect(try Archive.contents(of: cyrOut) == ["Привет.txt"])
+    }
+
+    @Test func verifiesIntactAndCorruptArchives() throws {
+        let source = try folder("verify-src")
+        try write("hello world", to: "hello.txt", in: source)
+        try write("second file", to: "sub/two.txt", in: source)
+        let zip = dir.appendingPathComponent("verify.zip")
+        try Archive.writeZip(from: source, to: zip)
+
+        let report = try Archive.verify(zip)
+        #expect(report.format.hasPrefix("ZIP"))
+        #expect(!report.encrypted)
+        #expect(report.entryCount >= 2)
+        #expect(report.totalBytes == 22)
+
+        // Corrupt a byte inside the compressed data stream and confirm verify catches the bad CRC/stream.
+        let catalog = try ZipCatalog.read(from: zip)
+        let entry = try #require(catalog.entries.first { $0.path == "hello.txt" })
+        let handle = try FileHandle(forReadingFrom: zip)
+        let range = try ZipCatalog.payloadRange(in: handle, for: entry)
+        try handle.close()
+        var bytes = try Data(contentsOf: zip)
+        bytes[Int(range.offset)] ^= 0xff
+        let corrupt = dir.appendingPathComponent("corrupt.zip")
+        try bytes.write(to: corrupt)
+        #expect(throws: ArchiveError.self) {
+            _ = try Archive.verify(corrupt)
+        }
+    }
+
+    @Test(arguments: ExportFormat.allCases)
+    func exportsToAllSupportedFormats(_ format: ExportFormat) throws {
+        let source = try folder("export-src-\(format.rawValue)")
+        try write("alpha-export", to: "a.txt", in: source)
+        try write("beta-export", to: "nested/b.txt", in: source)
+
+        let out = dir.appendingPathComponent("archive.\(format.fileExtension)")
+        try Archive.export(from: source, to: out, format: format, compressionLevel: .balanced)
+
+        let extracted = try folder("export-back-\(format.rawValue)")
+        _ = try Archive.extract(out, into: extracted)
+        #expect(try read("a.txt", in: extracted) == "alpha-export")
+        #expect(try read("nested/b.txt", in: extracted) == "beta-export")
+    }
 }
 
 @Suite struct NodeTests {

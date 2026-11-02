@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// One file or folder in an unpacked archive. Nodes are classes because the outline view tells items
 /// apart by identity.
@@ -10,7 +11,7 @@ public final class Node {
     public let isSymlink: Bool
     /// For a folder, everything inside it added up.
     public private(set) var size: Int64
-    public let modified: Date?
+    public private(set) var modified: Date?
     public private(set) var children: [Node] = []
     public private(set) weak var parent: Node?
 
@@ -33,6 +34,57 @@ public final class Node {
         let node = Node(url: root, path: "", isDirectory: true, isSymlink: false, size: 0, modified: nil)
         node.load()
         return node
+    }
+
+    /// Builds a `Node` tree directly from a `ZipCatalog` without touching the disk.
+    public static func fromCatalog(_ catalog: ZipCatalog, root: URL) -> Node {
+        let rootNode = Node(url: root, path: "", isDirectory: true, isSymlink: false, size: 0, modified: nil)
+        var folders: [String: Node] = ["": rootNode]
+
+        func ensureFolder(_ path: String) -> Node {
+            if let existing = folders[path] { return existing }
+            let parentPath = (path as NSString).deletingLastPathComponent
+            let parentNode = ensureFolder(parentPath)
+            let folderURL = root.appendingPathComponent(path, isDirectory: true)
+            let folderNode = Node(
+                url: folderURL, path: path, isDirectory: true, isSymlink: false, size: 0, modified: nil)
+            folderNode.parent = parentNode
+            parentNode.children.append(folderNode)
+            folders[path] = folderNode
+            return folderNode
+        }
+
+        for entry in catalog.entries {
+            if entry.isDirectory {
+                let folder = ensureFolder(entry.path)
+                if let mod = entry.modified { folder.modified = mod }
+                continue
+            }
+            let parentPath = (entry.path as NSString).deletingLastPathComponent
+            let parentNode = ensureFolder(parentPath)
+            if parentNode.children.contains(where: { $0.path == entry.path }) { continue }
+            let itemURL = root.appendingPathComponent(entry.path, isDirectory: false)
+            let child = Node(
+                url: itemURL,
+                path: entry.path,
+                isDirectory: false,
+                isSymlink: entry.isSymlink,
+                size: Int64(entry.uncompressedSize),
+                modified: entry.modified
+            )
+            child.parent = parentNode
+            parentNode.children.append(child)
+        }
+
+        func computeSizes(_ node: Node) {
+            guard node.isDirectory else { return }
+            for child in node.children where child.isDirectory {
+                computeSizes(child)
+            }
+            node.size = node.children.reduce(0) { $0 + $1.size }
+        }
+        computeSizes(rootNode)
+        return rootNode
     }
 
     private func load() {
@@ -125,8 +177,16 @@ public final class Node {
     public var kind: String {
         if isDirectory { return "Folder" }
         if isSymlink { return "Alias" }
-        return (try? url.resourceValues(forKeys: [.localizedTypeDescriptionKey]))?.localizedTypeDescription
-            ?? "Document"
+        if let desc = (try? url.resourceValues(forKeys: [.localizedTypeDescriptionKey]))?.localizedTypeDescription {
+            return desc
+        }
+        if let ext = url.pathExtension.isEmpty ? nil : url.pathExtension,
+            let type = UTType(filenameExtension: ext),
+            let desc = type.localizedDescription
+        {
+            return desc
+        }
+        return "Document"
     }
 
     public enum SortKey: String, Sendable {

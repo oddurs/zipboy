@@ -7,6 +7,29 @@ import ZipboyKit
 final class ArchiveDocument: NSDocument {
     nonisolated static let zipType = "public.zip-archive"
 
+    struct TrackedFile: Equatable, Sendable {
+        let entry: ZipCatalog.Entry
+        let inode: UInt64
+        let size: Int64
+        let modified: TimeInterval?
+    }
+
+    struct SourceSignature: Equatable, Sendable {
+        let url: URL
+        let inode: UInt64
+        let size: Int64
+        let modified: TimeInterval?
+
+        static func of(_ url: URL) -> SourceSignature? {
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                let inode = attrs[.systemFileNumber] as? UInt64,
+                let size = attrs[.size] as? Int64
+            else { return nil }
+            let mod = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
+            return SourceSignature(url: url.standardizedFileURL, inode: inode, size: size, modified: mod)
+        }
+    }
+
     private(set) var workspace: Workspace?
     private(set) var tree: Node?
     /// Set when the archive came from a format that can't be written back, such as RAR. Like Pages
@@ -16,20 +39,32 @@ final class ArchiveDocument: NSDocument {
     /// Kept from opening an encrypted archive, so saving encrypts it again rather than quietly dropping
     /// the protection.
     private(set) var password: String?
+    /// Filename encoding used for non-UTF-8 entry names; `.auto` unless overridden in View > Text Encoding.
+    private(set) var encoding: TextEncoding = .auto
+    /// Parent archive document when this archive was opened from inside another archive.
+    weak var parentDocument: ArchiveDocument?
+    /// Original Central Directory catalog and per-inode file provenance for verbatim delta saves.
+    private(set) var catalog: ZipCatalog?
+    private(set) var trackedByInode: [UInt64: TrackedFile] = [:]
+    private(set) var sourceSignature: SourceSignature?
+
     /// How far unpacking has got, from 0 to 1, or nil when the contents are ready.
     private(set) var loading: Double?
     private var cancelLoading = Cancellation()
     /// Long work under way after loading, such as "Saving… 40%", for the window's subtitle.
     private(set) var activity: String?
     private var saving: Saving?
+
+    private struct SaveJob: Sendable {
+        let contents: URL
+        let password: String?
+        let compressionLevel: Settings.CompressionLevel
+        let deltaPlan: (items: [ZipWriter.Item], sourceZip: URL, comment: Data)?
+        let cancellation: Cancellation
+    }
+
     /// The snapshot the background save zips, handed from the main thread to the writing one.
-    private let pendingSave = Locked<
-        (
-            contents: URL, password: String?,
-            compressionLevel: Settings.CompressionLevel,
-            cancellation: Cancellation
-        )?
-    >(nil)
+    private let pendingSave = Locked<SaveJob?>(nil)
 
     private struct Saving {
         let cancellation: Cancellation
@@ -51,7 +86,7 @@ final class ArchiveDocument: NSDocument {
     override func makeWindowControllers() {
         if workspace == nil, loading == nil {
             do {
-                install(try Workspace(), password: nil)
+                install(try Workspace(), password: nil, catalog: nil, sourceURL: nil)
             } catch {
                 presentError(error)
             }
@@ -85,24 +120,38 @@ final class ArchiveDocument: NSDocument {
 
     private func unpack(_ url: URL, ofType typeName: String) async {
         let cancellation = cancelLoading
-        var password: String?
+        let chosenEncoding = encoding
+        var password = self.password
         while true {
             do {
-                let (workspace, summary) = try await Task.detached { [password] in
+                let (workspace, summary, parsedCatalog) = try await Task.detached { [password] in
                     let workspace = try Workspace()
                     do {
-                        let summary = try Archive.extract(url, into: workspace.contents, password: password) { done in
+                        let summary = try Archive.extract(
+                            url, into: workspace.contents, password: password, encoding: chosenEncoding
+                        ) { done in
                             DispatchQueue.main.async { self.progressed(done, cancellation) }
                             return !cancellation.isCancelled
                         }
-                        return (workspace, summary)
+                        let catalog: ZipCatalog? =
+                            if typeName == Self.zipType, !summary.encrypted {
+                                try? ZipCatalog.read(from: url, encoding: chosenEncoding)
+                            } else {
+                                nil
+                            }
+                        return (workspace, summary, catalog)
                     } catch {
                         workspace.discard()
                         throw error
                     }
                 }.value
                 guard !cancellation.isCancelled else { return workspace.discard() }
-                install(workspace, password: summary.encrypted ? password : nil)
+                install(
+                    workspace,
+                    password: summary.encrypted ? password : nil,
+                    catalog: parsedCatalog,
+                    sourceURL: typeName == Self.zipType ? url : nil
+                )
                 if typeName != Self.zipType {
                     importedFrom = (url, Self.shortName(summary.format))
                     fileURL = nil
@@ -135,6 +184,25 @@ final class ArchiveDocument: NSDocument {
         }
     }
 
+    /// Re-reads the archive from its source file using `newEncoding` for non-UTF-8 entry names.
+    func reload(withEncoding newEncoding: TextEncoding) {
+        guard let sourceURL = source, loading == nil else { return }
+        encoding = newEncoding
+        let typeName = importedFrom == nil ? Self.zipType : "public.archive"
+        cancelLoading.cancel()
+        cancelLoading = Cancellation()
+        loading = 0
+        onChange?()
+        Task { await unpack(sourceURL, ofType: typeName) }
+    }
+
+    @objc func selectEncoding(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+            let chosen = TextEncoding(rawValue: raw)
+        else { return }
+        reload(withEncoding: chosen)
+    }
+
     /// What a new archive is called until it's saved: after the one thing put in it, as Finder's
     /// Compress names its zip, or plain "Archive".
     var suggestedName: String? {
@@ -147,13 +215,19 @@ final class ArchiveDocument: NSDocument {
     override func defaultDraftName() -> String { suggestedName ?? "Archive" }
 
     override var displayName: String! {
-        get { fileURL == nil ? defaultDraftName() : super.displayName }
+        get {
+            let base = (fileURL == nil ? defaultDraftName() : super.displayName) ?? "Archive"
+            if let parentName = parentDocument?.displayName, !parentName.isEmpty {
+                return "\(base) — \(parentName)"
+            }
+            return base
+        }
         set { super.displayName = newValue }
     }
 
     /// The empty window from launch, which an opened archive takes the place of, as in TextEdit.
     var isTransient: Bool {
-        fileURL == nil && importedFrom == nil && !isDocumentEdited && loading == nil
+        fileURL == nil && importedFrom == nil && parentDocument == nil && !isDocumentEdited && loading == nil
             && tree?.children.isEmpty != false
     }
 
@@ -183,8 +257,15 @@ final class ArchiveDocument: NSDocument {
         } catch {
             return completionHandler(error)
         }
+        let delta = buildDeltaPlan(workspaceRoot: workspace.contents, snapshotRoot: snapshot)
         let cancellation = Cancellation()
-        pendingSave.value = (snapshot, password, Settings.shared.compressionLevel, cancellation)
+        pendingSave.value = SaveJob(
+            contents: snapshot,
+            password: password,
+            compressionLevel: Settings.shared.compressionLevel,
+            deltaPlan: delta,
+            cancellation: cancellation
+        )
         let autosave = saveOperation == .autosaveInPlaceOperation || saveOperation == .autosaveElsewhereOperation
         saving = Saving(cancellation: cancellation, autosave: autosave)
         // A quick save says nothing. One that takes a while shows how far it has got.
@@ -198,6 +279,10 @@ final class ArchiveDocument: NSDocument {
             MainActor.assumeIsolated {
                 if self.saving?.shown == true { self.report(nil) }
                 self.saving = nil
+                if error == nil {
+                    self.refreshTrackingAfterSave(to: url, for: saveOperation)
+                    self.parentDocument?.childDidSave()
+                }
             }
             completionHandler(error)
         }
@@ -207,22 +292,126 @@ final class ArchiveDocument: NSDocument {
         guard let job = pendingSave.take() else { throw CocoaError(.fileWriteUnknown) }
         unblockUserInteraction()
         var reported = -1
+        let progressCallback: (Double) -> Bool = { done in
+            let percent = Int(done * 100)
+            if percent != reported {
+                reported = percent
+                DispatchQueue.main.async { self.saveProgressed(percent, job.cancellation) }
+            }
+            return !job.cancellation.isCancelled
+        }
         do {
-            try Archive.writeZip(
-                from: job.contents, to: url, password: job.password,
-                compressionLevel: job.compressionLevel
-            ) { done in
-                let percent = Int(done * 100)
-                if percent != reported {
-                    reported = percent
-                    DispatchQueue.main.async { self.saveProgressed(percent, job.cancellation) }
-                }
-                return !job.cancellation.isCancelled
+            if job.password == nil, let delta = job.deltaPlan {
+                try ZipWriter.write(
+                    items: delta.items,
+                    sourceZip: delta.sourceZip,
+                    to: url,
+                    compressionLevel: job.compressionLevel,
+                    comment: delta.comment,
+                    progress: progressCallback
+                )
+            } else {
+                try Archive.writeZip(
+                    from: job.contents, to: url, password: job.password,
+                    compressionLevel: job.compressionLevel,
+                    progress: progressCallback
+                )
             }
         } catch ArchiveError.cancelled {
             // The one error AppKit never shows; the next autosave starts from the newer contents.
             throw CocoaError(.userCancelled)
         }
+    }
+
+    /// Checks whether a workspace file at `path` is still untouched since unpacking from the source ZIP.
+    func verbatimEntry(forPath path: String) -> ZipCatalog.Entry? {
+        guard let workspace else { return nil }
+        let fileURL = workspace.contents.appendingPathComponent(path)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+            let inode = attrs[.systemFileNumber] as? UInt64,
+            let tracked = trackedByInode[inode]
+        else { return nil }
+        let currentSize = (attrs[.size] as? Int64) ?? 0
+        let currentMod = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
+        guard currentSize == tracked.size else { return nil }
+        if let expectedMod = tracked.modified, let currentMod, abs(currentMod - expectedMod) > 0.001 {
+            return nil
+        }
+        return tracked.entry
+    }
+
+    private func buildDeltaPlan(
+        workspaceRoot: URL, snapshotRoot: URL
+    ) -> (items: [ZipWriter.Item], sourceZip: URL, comment: Data)? {
+        guard password == nil,
+            let catalog,
+            let expectedSig = sourceSignature,
+            let currentSig = SourceSignature.of(expectedSig.url),
+            currentSig == expectedSig,
+            let paths = try? Archive.contents(of: workspaceRoot)
+        else { return nil }
+
+        let fm = FileManager.default
+        var items: [ZipWriter.Item] = []
+        items.reserveCapacity(paths.count)
+
+        for path in paths {
+            let liveURL = workspaceRoot.appendingPathComponent(path)
+            let snapURL = snapshotRoot.appendingPathComponent(path)
+            if let attrs = try? fm.attributesOfItem(atPath: liveURL.path),
+                (attrs[.type] as? FileAttributeType) == .typeRegular,
+                let entry = verbatimEntry(forPath: path),
+                !entry.isEncrypted
+            {
+                let renamed = path == entry.path ? nil : path
+                items.append(.verbatim(entry, newPath: renamed))
+            } else {
+                items.append(.workspace(url: snapURL, path: path))
+            }
+        }
+        return (items: items, sourceZip: expectedSig.url, comment: catalog.comment)
+    }
+
+    private func refreshTrackingAfterSave(to url: URL, for operation: NSDocument.SaveOperationType) {
+        guard password == nil, let workspace else {
+            catalog = nil
+            trackedByInode = [:]
+            sourceSignature = nil
+            return
+        }
+        let targetURL: URL? =
+            switch operation {
+            case .saveOperation, .saveAsOperation, .autosaveInPlaceOperation:
+                fileURL ?? url
+            default:
+                nil
+            }
+        guard let targetURL, let freshCatalog = try? ZipCatalog.read(from: targetURL, encoding: encoding) else {
+            return
+        }
+        recordProvenance(catalog: freshCatalog, sourceURL: targetURL, workspace: workspace)
+    }
+
+    private func recordProvenance(catalog: ZipCatalog?, sourceURL: URL?, workspace: Workspace) {
+        self.catalog = catalog
+        guard let catalog, let sourceURL, let sig = SourceSignature.of(sourceURL) else {
+            trackedByInode = [:]
+            sourceSignature = nil
+            return
+        }
+        sourceSignature = sig
+        let fm = FileManager.default
+        var map: [UInt64: TrackedFile] = [:]
+        for entry in catalog.entries where !entry.isDirectory && !entry.isSymlink {
+            let itemURL = workspace.contents.appendingPathComponent(entry.path)
+            guard let attrs = try? fm.attributesOfItem(atPath: itemURL.path),
+                let inode = attrs[.systemFileNumber] as? UInt64,
+                let size = attrs[.size] as? Int64
+            else { continue }
+            let mod = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
+            map[inode] = TrackedFile(entry: entry, inode: inode, size: size, modified: mod)
+        }
+        trackedByInode = map
     }
 
     private func saveProgressed(_ percent: Int, _ cancellation: Cancellation) {
@@ -252,21 +441,34 @@ final class ArchiveDocument: NSDocument {
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
-        case #selector(choosePassword(_:)): loading == nil
-        case #selector(removePassword(_:)): loading == nil && password != nil
+        case #selector(choosePassword(_:)):
+            return loading == nil
+        case #selector(removePassword(_:)):
+            return loading == nil && password != nil
+        case #selector(verifyArchive(_:)):
+            return loading == nil && (source != nil || tree?.children.isEmpty == false)
+        case #selector(exportArchive(_:)):
+            return loading == nil && tree?.children.isEmpty == false
+        case #selector(selectEncoding(_:)):
+            if let menuItem = item as? NSMenuItem, let raw = menuItem.representedObject as? String {
+                menuItem.state = (encoding.rawValue == raw) ? .on : .off
+            }
+            return loading == nil && source != nil
         // Nothing to save or revert to while unpacking.
         case #selector(save(_:)), #selector(saveAs(_:)), #selector(revertToSaved(_:)):
-            loading == nil && super.validateUserInterfaceItem(item)
-        default: super.validateUserInterfaceItem(item)
+            return loading == nil && super.validateUserInterfaceItem(item)
+        default:
+            return super.validateUserInterfaceItem(item)
         }
     }
 
-    private func install(_ workspace: Workspace, password: String?) {
+    private func install(_ workspace: Workspace, password: String?, catalog: ZipCatalog?, sourceURL: URL?) {
         watcher?.stop()
         self.workspace?.discard()
         self.workspace = workspace
         self.password = password
         loading = nil
+        recordProvenance(catalog: catalog, sourceURL: sourceURL, workspace: workspace)
         watcher = FileWatcher(workspace.contents) { [weak self] in self?.contentsMayHaveChanged() }
         undoManager?.removeAllActions()
         rescan()
@@ -278,6 +480,138 @@ final class ArchiveDocument: NSDocument {
         return name.isEmpty ? "Archive" : name
     }
 
+    // MARK: Verify and Export
+
+    @objc func verifyArchive(_ sender: Any?) {
+        guard loading == nil else { return }
+        if let sourceURL = source {
+            let currentPassword = password
+            let currentEncoding = encoding
+            report("Verifying…")
+            Task {
+                defer { report(nil) }
+                do {
+                    let reportData = try await Task.detached {
+                        try Archive.verify(sourceURL, password: currentPassword, encoding: currentEncoding)
+                    }.value
+                    let alert = NSAlert()
+                    alert.alertStyle = .informational
+                    alert.messageText = "“\(sourceURL.lastPathComponent)” is intact."
+                    let countText =
+                        reportData.entryCount == 1 ? "1 entry" : "\(reportData.entryCount.formatted()) entries"
+                    let sizeText = ByteCountFormatter.string(
+                        fromByteCount: reportData.totalBytes, countStyle: .file)
+                    alert.informativeText =
+                        "Verified \(countText) (\(sizeText)) in \(reportData.format) format with no errors."
+                    if let window = windowForSheet {
+                        _ = await alert.beginSheetModal(for: window)
+                    } else {
+                        alert.runModal()
+                    }
+                } catch {
+                    let alert = NSAlert()
+                    alert.alertStyle = .critical
+                    alert.messageText = "Verification failed for “\(sourceURL.lastPathComponent)”."
+                    alert.informativeText = error.localizedDescription
+                    if let window = windowForSheet {
+                        _ = await alert.beginSheetModal(for: window)
+                    } else {
+                        alert.runModal()
+                    }
+                }
+            }
+        } else if let tree {
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "“\(displayName ?? "Archive")” is intact."
+            let count = tree.descendantCount
+            let countText = count == 1 ? "1 item" : "\(count.formatted()) items"
+            let sizeText = ByteCountFormatter.string(fromByteCount: tree.size, countStyle: .file)
+            alert.informativeText = "Verified \(countText) (\(sizeText)) in the workspace."
+            if let window = windowForSheet {
+                Task { _ = await alert.beginSheetModal(for: window) }
+            } else {
+                alert.runModal()
+            }
+        }
+    }
+
+    @objc func exportArchive(_ sender: Any?) {
+        guard let window = windowForSheet, let workspace else { return }
+        let panel = NSSavePanel()
+        panel.prompt = "Export"
+        panel.title = "Export Archive"
+        panel.canCreateDirectories = true
+
+        let formatPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for fmt in ExportFormat.allCases {
+            formatPopup.addItem(withTitle: fmt.title)
+        }
+        let stem = source.map(Naming.stem) ?? defaultDraftName()
+        panel.nameFieldStringValue = "\(stem).\(ExportFormat.zip.fileExtension)"
+        panel.directoryURL = source?.deletingLastPathComponent()
+
+        let accessory = NSStackView()
+        accessory.orientation = .horizontal
+        accessory.alignment = .firstBaseline
+        accessory.spacing = 8
+        accessory.edgeInsets = NSEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
+        let label = NSTextField(labelWithString: "Format:")
+        label.font = .systemFont(ofSize: 13)
+        accessory.addArrangedSubview(label)
+        accessory.addArrangedSubview(formatPopup)
+        accessory.frame = NSRect(x: 0, y: 0, width: 320, height: 42)
+        panel.accessoryView = accessory
+
+        @MainActor
+        final class FormatCoordinator: NSObject {
+            let panel: NSSavePanel
+            let popup: NSPopUpButton
+            init(panel: NSSavePanel, popup: NSPopUpButton) {
+                self.panel = panel
+                self.popup = popup
+            }
+            @objc func formatChanged(_ sender: NSPopUpButton) {
+                let format = ExportFormat.allCases[max(0, sender.indexOfSelectedItem)]
+                let current = panel.nameFieldStringValue
+                let cleanStem = Naming.stem(of: URL(fileURLWithPath: current))
+                panel.nameFieldStringValue = "\(cleanStem).\(format.fileExtension)"
+            }
+        }
+        let coordinator = FormatCoordinator(panel: panel, popup: formatPopup)
+        formatPopup.target = coordinator
+        formatPopup.action = #selector(FormatCoordinator.formatChanged(_:))
+
+        panel.beginSheetModal(for: window) { response in
+            _ = coordinator  // retain until sheet closes
+            guard response == .OK, let destination = panel.url else { return }
+            MainActor.assumeIsolated {
+                let format = ExportFormat.allCases[max(0, formatPopup.indexOfSelectedItem)]
+                let level = Settings.shared.compressionLevel
+                let currentPassword = self.password
+                guard let snapshot = try? workspace.snapshot() else { return }
+                self.report("Exporting…")
+                Task.detached {
+                    defer {
+                        try? FileManager.default.removeItem(at: snapshot)
+                        DispatchQueue.main.async { self.report(nil) }
+                    }
+                    do {
+                        try Archive.export(
+                            from: snapshot,
+                            to: destination,
+                            format: format,
+                            compressionLevel: level,
+                            password: currentPassword
+                        )
+                    } catch {
+                        _ = await MainActor.run { self.presentError(error) }
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: Contents
 
     private func rescan() {
@@ -287,9 +621,20 @@ final class ArchiveDocument: NSDocument {
         onChange?()
     }
 
+    func childDidSave() {
+        if let workspace {
+            let fresh = Node.scan(workspace.contents)
+            tree = fresh
+            signature = Self.signature(of: fresh)
+        }
+        updateChangeCount(.changeDone)
+        editsInvalidateAutosave()
+        onChange?()
+    }
+
     /// An app that opened a file from the archive saved over it. That can't be undone here, but the
     /// document must count as edited so the change is saved.
-    private func contentsMayHaveChanged() {
+    func contentsMayHaveChanged() {
         guard let workspace else { return }
         let fresh = Node.scan(workspace.contents)
         let freshSignature = Self.signature(of: fresh)

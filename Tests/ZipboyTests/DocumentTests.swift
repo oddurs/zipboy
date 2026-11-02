@@ -243,4 +243,86 @@ import ZipboyKit
         #expect(try await save(document, to: plain, as: .saveToOperation) == nil)
         #expect(try names(in: plain) == ["secret.txt"])
     }
+
+    @Test func deltaSavePreservesUnchangedEntriesByteForByteAcrossEdits() async throws {
+        let payloadKeep = Data((0..<8192).map { UInt8(($0 * 73) & 0xff) })
+        let payloadRename = Data("rename-without-recompressing-payload".utf8)
+        let document = try await document([
+            "keep.bin": payloadKeep,
+            "old.txt": payloadRename,
+            "remove.txt": Data("gone".utf8),
+        ])
+        defer { document.close() }
+
+        let zip = try #require(document.fileURL)
+        let beforeCatalog = try ZipCatalog.read(from: zip)
+        let beforeKeep = try #require(beforeCatalog.entries.first { $0.path == "keep.bin" })
+        let beforeHandle = try FileHandle(forReadingFrom: zip)
+        let beforeRange = try ZipCatalog.payloadRange(in: beforeHandle, for: beforeKeep)
+        try beforeHandle.seek(toOffset: beforeRange.offset)
+        let beforeCompressed = try #require(try beforeHandle.read(upToCount: Int(beforeRange.length)))
+        try beforeHandle.close()
+
+        try document.rename("old.txt", to: "renamed.txt")
+        try document.remove(["remove.txt"])
+        let addedURL = dir.appendingPathComponent("fresh.txt")
+        try Data("fresh-addition".utf8).write(to: addedURL)
+        try await document.add([addedURL], into: "") { _ in .replace }
+
+        #expect(try await save(document, to: zip, as: .saveOperation) == nil)
+
+        let afterCatalog = try ZipCatalog.read(from: zip)
+        let afterKeep = try #require(afterCatalog.entries.first { $0.path == "keep.bin" })
+        let afterHandle = try FileHandle(forReadingFrom: zip)
+        let afterRange = try ZipCatalog.payloadRange(in: afterHandle, for: afterKeep)
+        try afterHandle.seek(toOffset: afterRange.offset)
+        let afterCompressed = try #require(try afterHandle.read(upToCount: Int(afterRange.length)))
+        try afterHandle.close()
+
+        #expect(afterCompressed == beforeCompressed)
+        #expect(try names(in: zip) == ["fresh.txt", "keep.bin", "renamed.txt"])
+
+        // A second consecutive edit + save in place must also succeed using refreshed catalog tracking.
+        _ = try document.newFolder(in: "")
+        #expect(try await save(document, to: zip, as: .saveOperation) == nil)
+        #expect(try names(in: zip) == ["fresh.txt", "keep.bin", "renamed.txt", "untitled folder"])
+    }
+
+    @Test func nestedArchiveTracksParentAndFinderServicesRoundTrip() async throws {
+        let parentDoc = try await document(["outer.txt": Data("outer".utf8)])
+        defer { parentDoc.close() }
+        let childDoc = try await document(["inner.txt": Data("inner".utf8)])
+        defer { childDoc.close() }
+
+        childDoc.parentDocument = parentDoc
+        #expect(childDoc.displayName.contains("—"))
+        let childZip = try #require(childDoc.fileURL)
+        #expect(try await save(childDoc, to: childZip, as: .saveOperation) == nil)
+        #expect(parentDoc.isDocumentEdited)
+
+        // Finder Services: compress and extract round-trip.
+        let serviceDir = dir.appendingPathComponent("services")
+        try FileManager.default.createDirectory(at: serviceDir, withIntermediateDirectories: true)
+        let sample = serviceDir.appendingPathComponent("sample.txt")
+        try Data("service-payload".utf8).write(to: sample)
+
+        let createdZip = try AppDelegate.compressFiles([sample], into: serviceDir)
+        #expect(createdZip.lastPathComponent == "sample.zip")
+
+        let extractDir = dir.appendingPathComponent("services-out")
+        try FileManager.default.createDirectory(at: extractDir, withIntermediateDirectories: true)
+        let extracted = try AppDelegate.extractArchives([createdZip], into: extractDir)
+        #expect(!extracted.isEmpty)
+
+        // File promise provider materializes a promised node to a destination URL.
+        let browser = BrowserViewController()
+        let promisedNode = try #require(childDoc.tree?.find("inner.txt"))
+        let provider = browser.filePromiseProvider(for: promisedNode)
+        #expect(browser.filePromiseProvider(provider, fileNameForType: "public.plain-text") == "inner.txt")
+        let dest = dir.appendingPathComponent("promised-out.txt")
+        var writeError: Error?
+        browser.filePromiseProvider(provider, writePromiseTo: dest) { writeError = $0 }
+        #expect(writeError == nil)
+        #expect(try Data(contentsOf: dest) == Data("inner".utf8))
+    }
 }

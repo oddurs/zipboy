@@ -20,6 +20,8 @@ final class PreviewViewController: NSViewController {
     private let infoHeader = NSTextField(labelWithString: "Information")
     private let rowsStack = NSStackView()
     private let actionsStack = NSStackView()
+    private var checksumCache: [String: Checksums] = [:]
+    private var currentInspectKey: String?
 
     override func loadView() {
         let root = NSView()
@@ -171,16 +173,54 @@ final class PreviewViewController: NSViewController {
                 node.isSymlink
                 ? (try? FileManager.default.destinationOfSymbolicLink(atPath: node.url.path))
                 : nil
-            details([
+
+            let key = "\(node.url.path)|\(node.size)|\(node.modified?.timeIntervalSince1970 ?? 0)"
+            currentInspectKey = key
+            let cachedDigest = checksumCache[key]
+            let catalogCRC = archive.verbatimEntry(forPath: node.path).map { String(format: "%08X", $0.crc32) }
+            let crcDisplay = cachedDigest?.crc32Hex ?? catalogCRC
+            let shaDisplay = cachedDigest?.sha256Hex
+
+            let baseRows: [(String, String)?] = [
                 ("Kind", node.kind),
                 ("Size", size(node)),
                 node.isDirectory ? ("Contains", items(node.descendantCount)) : nil,
                 ("Location", parentFolder.isEmpty ? "Top Level" : parentFolder),
                 linkTarget.map { ("Points To", $0) },
                 ("Modified", node.modified.map(Self.date) ?? "—"),
-            ])
+                !node.isDirectory && !node.isSymlink ? crcDisplay.map { ("CRC-32", $0) } : nil,
+                !node.isDirectory && !node.isSymlink ? shaDisplay.map { ("SHA-256", $0) } : nil,
+            ]
+            details(baseRows)
+
+            if !node.isDirectory, !node.isSymlink, cachedDigest == nil, node.size <= (64 << 20) {
+                let fileURL = node.url
+                let kindText = node.kind
+                let sizeText = size(node)
+                let modifiedText = node.modified.map(Self.date) ?? "—"
+                Task.detached { [weak self] in
+                    guard let computed = try? Checksums.compute(for: fileURL) else { return }
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.checksumCache[key] = computed
+                        guard self.currentInspectKey == key else { return }
+                        self.details([
+                            ("Kind", kindText),
+                            ("Size", sizeText),
+                            ("Location", parentFolder.isEmpty ? "Top Level" : parentFolder),
+                            ("Modified", modifiedText),
+                            ("CRC-32", computed.crc32Hex),
+                            ("SHA-256", computed.sha256Hex),
+                        ])
+                    }
+                }
+            }
+
+            let isInnerArchive =
+                !node.isDirectory
+                && ZipMethod.archiveExtensions.contains(node.url.pathExtension.lowercased())
             configureActions([
-                node.isDirectory
+                node.isDirectory || isInnerArchive
                     ? ("Open", "folder", #selector(BrowserViewController.openItems(_:)), true)
                     : ("Quick Look", "eye", #selector(BrowserViewController.toggleQuickLook(_:)), true),
                 ("Extract", "arrow.down.to.line", #selector(BrowserViewController.extract(_:)), true),
@@ -188,6 +228,7 @@ final class PreviewViewController: NSViewController {
                 ("Delete", "trash", #selector(BrowserViewController.delete(_:)), true),
             ])
         } else if nodes.isEmpty {
+            currentInspectKey = nil
             let icon =
                 archive.source.map { NSWorkspace.shared.icon(forFile: $0.path) }
                 ?? NSWorkspace.shared.icon(for: .zip)
@@ -230,14 +271,15 @@ final class PreviewViewController: NSViewController {
                 ("Add Files", "plus", #selector(BrowserViewController.addFiles(_:)), true),
                 ("New Folder", "folder.badge.plus", #selector(BrowserViewController.newFolder(_:)), true),
                 (
-                    archive.password == nil ? "Lock" : "Password",
-                    archive.password == nil ? "lock" : "lock.fill",
-                    #selector(ArchiveDocument.choosePassword(_:)),
-                    true
+                    "Verify",
+                    "checkmark.shield",
+                    #selector(ArchiveDocument.verifyArchive(_:)),
+                    archive.source != nil || hasItems
                 ),
                 ("Extract All", "arrow.down.to.line", #selector(BrowserViewController.extract(_:)), hasItems),
             ])
         } else {
+            currentInspectKey = nil
             picture(Self.fan(nodes.prefix(3).map { NSWorkspace.shared.icon(forFile: $0.url.path) }))
             name.stringValue = "\(nodes.count.formatted()) Items Selected"
             let total = nodes.reduce(Int64(0)) { $0 + $1.size }

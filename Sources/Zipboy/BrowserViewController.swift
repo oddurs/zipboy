@@ -9,7 +9,7 @@ import ZipboyKit
 @MainActor
 final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate,
     NSMenuDelegate, NSUserInterfaceValidations, NSTextFieldDelegate, @preconcurrency QLPreviewPanelDataSource,
-    @preconcurrency QLPreviewPanelDelegate
+    @preconcurrency QLPreviewPanelDelegate, NSFilePromiseProviderDelegate
 {
     weak var document: ArchiveDocument?
     var onSelectionChange: (([Node]) -> Void)?
@@ -330,8 +330,33 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         for node in nodes {
             if node.isDirectory {
                 outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
+            } else if Self.isNestedArchive(node.url) {
+                openNestedArchive(at: node.url)
             } else {
                 NSWorkspace.shared.open(node.url)
+            }
+        }
+    }
+
+    static func isNestedArchive(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if ZipMethod.archiveExtensions.contains(ext) { return true }
+        if let type = UTType(filenameExtension: ext), type.conforms(to: .archive) { return true }
+        return false
+    }
+
+    func openNestedArchive(at url: URL) {
+        let parent = document
+        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
+            MainActor.assumeIsolated {
+                if let error {
+                    parent?.presentError(error)
+                    return
+                }
+                if let child = doc as? ArchiveDocument {
+                    child.parentDocument = parent
+                    child.windowControllers.first?.synchronizeWindowTitleWithDocumentName()
+                }
             }
         }
     }
@@ -701,7 +726,51 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     // MARK: Dragging out
 
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
-        (item as? Node)?.url as NSURL?
+        guard let node = item as? Node else { return nil }
+        if FileManager.default.fileExists(atPath: node.url.path) {
+            return node.url as NSURL
+        }
+        return filePromiseProvider(for: node)
+    }
+
+    func filePromiseProvider(for node: Node) -> NSFilePromiseProvider {
+        let type: UTType =
+            node.isDirectory
+            ? .folder
+            : (UTType(filenameExtension: node.url.pathExtension) ?? .data)
+        let provider = NSFilePromiseProvider(fileType: type.identifier, delegate: self)
+        provider.userInfo = node
+        return provider
+    }
+
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
+        (filePromiseProvider.userInfo as? Node)?.name ?? "Item"
+    }
+
+    nonisolated func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue {
+        OperationQueue()
+    }
+
+    nonisolated func filePromiseProvider(
+        _ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
+        guard let node = filePromiseProvider.userInfo as? Node else {
+            completionHandler(nil)
+            return
+        }
+        do {
+            if FileManager.default.fileExists(atPath: node.url.path) {
+                try FileManager.default.copyItem(at: node.url, to: url)
+            } else if node.isDirectory {
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            } else {
+                try Data().write(to: url)
+            }
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
     }
 
     func outlineView(
