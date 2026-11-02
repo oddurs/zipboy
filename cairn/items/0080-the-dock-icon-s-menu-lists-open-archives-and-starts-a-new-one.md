@@ -3,8 +3,9 @@ id: 80
 uid: 911f27bf-557f-4b1e-9aa6-b606d48c2f9b
 title: The Dock icon's menu lists open archives and starts a new one
 type: feature
-status: backlog
+status: done
 milestone: v0.4
+assignee: Oddur Sigurdsson
 created: 2026-11-02
 updated: 2026-11-02
 priority: p3
@@ -24,5 +25,9 @@ adds the window list itself, so the menu must not repeat it.
 
 ## Acceptance criteria
 
-- [ ] The Dock menu offers New Archive and Open…, each doing what the File menu item does, covered by a test
-- [ ] Open windows appear once, from AppKit, not twice
+- [x] The Dock menu offers New Archive and Open…, each doing what the File menu item does, covered by a test
+- [x] Open windows appear once, from AppKit, not twice
+
+## 2026-11-02
+
+Evidence. theDockMenuStartsAndOpensArchives: the menu is exactly New Archive and Open…, targeted at the shared document controller with the File menu's actions. Criterion 2 by construction: the menu adds no window items, so the Dock's own window list is the only one; the test's exact title list guards that. Not opened on screen: right-clicking the Dock needs the pointer.
