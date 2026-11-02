@@ -508,3 +508,64 @@ struct DockMenuTests {
         #expect(file?.item(withTitle: "New Archive")?.action == new.action)
     }
 }
+
+@MainActor
+@Suite(.serialized) struct RestorationTests {
+    func archive() async throws -> ArchiveDocument {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("restore-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("FolderA/Sub"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: dir.appendingPathComponent("FolderA/Sub/a.txt"))
+        try Data("y".utf8).write(to: dir.appendingPathComponent("top.txt"))
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        try await doc.add([dir.appendingPathComponent("FolderA"), dir.appendingPathComponent("top.txt")], into: "") {
+            _ in .keepBoth
+        }
+        return doc
+    }
+
+    func controller(_ doc: ArchiveDocument) throws -> ArchiveWindowController {
+        try #require(doc.windowControllers.first as? ArchiveWindowController)
+    }
+
+    @Test func aWindowComesBackWithItsFoldersAndSelection() async throws {
+        let before = try await archive()
+        defer { before.close() }
+        let first = try controller(before)
+        let outline = first.browser.outline
+        outline.expandItem(try #require(outline.item(atRow: 0) as? Node))
+        first.browser.restore(.init(expanded: ["FolderA"], selected: ["FolderA/Sub"], query: ""))
+        #expect(first.browser.savedState == .init(expanded: ["FolderA"], selected: ["FolderA/Sub"], query: ""))
+
+        let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+        first.window(try #require(first.window), willEncodeRestorableState: archiver)
+        archiver.finishEncoding()
+
+        let after = try await archive()
+        defer { after.close() }
+        let second = try controller(after)
+        let unarchiver = try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)
+        second.window(try #require(second.window), didDecodeRestorableState: unarchiver)
+        #expect(second.browser.savedState.selected == ["FolderA/Sub"])
+        #expect(second.browser.savedState.expanded == ["FolderA"])
+    }
+
+    @Test func stateWaitsForTheArchiveToOpenAndSkipsWhatIsGone() async throws {
+        let browser = BrowserViewController()
+        browser.restore(.init(expanded: ["FolderA", "Missing"], selected: ["top.txt", "gone.txt"], query: ""))
+        // Nothing to apply it to yet; the first load after opening does.
+        let doc = try await archive()
+        defer { doc.close() }
+        browser.document = doc
+        browser.reload()
+        #expect(browser.savedState.selected == ["top.txt"])
+        #expect(browser.savedState.expanded == ["FolderA"])
+    }
+
+    @Test func archivesOpenAsTabsWhenThePersonPrefersThem() async throws {
+        let doc = try await archive()
+        defer { doc.close() }
+        #expect(try controller(doc).window?.tabbingMode == .automatic)
+    }
+}

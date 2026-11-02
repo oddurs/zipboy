@@ -3,10 +3,10 @@ import ZipboyKit
 
 /// One archive's window: the file list, a preview inspector beside it, and a unified toolbar.
 @MainActor
-final class ArchiveWindowController: NSWindowController, NSToolbarDelegate,
+final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate,
     NSSharingServicePickerToolbarItemDelegate
 {
-    private let browser = BrowserViewController()
+    let browser = BrowserViewController()
     private let preview = PreviewViewController()
     private let split = InspectorSplitViewController()
     private let searchItem = NSSearchToolbarItem(itemIdentifier: .search)
@@ -18,7 +18,10 @@ final class ArchiveWindowController: NSWindowController, NSToolbarDelegate,
             backing: .buffered, defer: true)
         window.minSize = NSSize(width: 560, height: 320)
         window.toolbarStyle = .unified
+        // Tabs follow the person's "Prefer tabs" setting, as every document app's do.
+        window.tabbingMode = .automatic
         super.init(window: window)
+        window.delegate = self
 
         browser.document = document
         browser.onSelectionChange = { [weak self] nodes in self?.selectionChanged(nodes) }
@@ -109,6 +112,31 @@ final class ArchiveWindowController: NSWindowController, NSToolbarDelegate,
 
     @objc func searchChanged(_ sender: NSSearchField) {
         browser.filter(sender.stringValue)
+        window?.invalidateRestorableState()
+    }
+
+    // MARK: Restoring
+
+    private enum Key {
+        static let expanded = "ZipboyExpanded"
+        static let selected = "ZipboySelected"
+        static let query = "ZipboyQuery"
+    }
+
+    func window(_ window: NSWindow, willEncodeRestorableState state: NSCoder) {
+        let saved = browser.savedState
+        state.encode(saved.expanded as NSArray, forKey: Key.expanded)
+        state.encode(saved.selected as NSArray, forKey: Key.selected)
+        state.encode(saved.query as NSString, forKey: Key.query)
+    }
+
+    func window(_ window: NSWindow, didDecodeRestorableState state: NSCoder) {
+        let saved = BrowserViewController.SavedState(
+            expanded: state.decodeArrayOfObjects(ofClass: NSString.self, forKey: Key.expanded) as? [String] ?? [],
+            selected: state.decodeArrayOfObjects(ofClass: NSString.self, forKey: Key.selected) as? [String] ?? [],
+            query: state.decodeObject(of: NSString.self, forKey: Key.query) as String? ?? "")
+        searchItem.searchField.stringValue = saved.query
+        browser.restore(saved)
     }
 
     @objc func focusSearch(_ sender: Any?) {

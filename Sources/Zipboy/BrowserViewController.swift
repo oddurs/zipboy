@@ -36,6 +36,15 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     private var springLoadWorkItem: DispatchWorkItem?
     private var springLoadTargetPath: String?
     var springLoadDelay: TimeInterval = 0.7
+    /// State from the last session, held until the archive has finished opening.
+    private var pendingRestore: SavedState?
+
+    /// What a relaunch puts back: the open folders, the selection, and the search.
+    struct SavedState: Equatable {
+        var expanded: [String]
+        var selected: [String]
+        var query: String
+    }
 
     private static let nameColumn = NSUserInterfaceItemIdentifier("name")
     private static let modifiedColumn = NSUserInterfaceItemIdentifier("modified")
@@ -123,6 +132,10 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             return
         }
         guard let tree = document?.tree else { return }
+        if let state = pendingRestore {
+            pendingRestore = nil
+            return restore(state)
+        }
         let open = restoring ?? expandedPaths()
         let selected = selection.map(\.path)
 
@@ -157,6 +170,23 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         guard outline.headerView !== wanted else { return }
         outline.headerView = wanted
         outline.enclosingScrollView?.tile()
+    }
+
+    var savedState: SavedState {
+        SavedState(
+            expanded: query.isEmpty ? expandedPaths() : openBeforeSearch, selected: selection.map(\.path), query: query)
+    }
+
+    /// Puts back a saved state, once the archive is open. Paths no longer in the archive are passed over.
+    func restore(_ state: SavedState) {
+        guard document?.tree != nil, document?.loading == nil else {
+            pendingRestore = state
+            return
+        }
+        query = state.query
+        openBeforeSearch = state.expanded
+        reload(restoring: query.isEmpty ? state.expanded : nil)
+        reveal(state.selected)
     }
 
     func filter(_ text: String) {
@@ -797,6 +827,15 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
         selectionChanged()
+        view.window?.invalidateRestorableState()
+    }
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        view.window?.invalidateRestorableState()
+    }
+
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        view.window?.invalidateRestorableState()
     }
 
     // MARK: Dragging out
