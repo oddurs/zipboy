@@ -21,6 +21,8 @@ final class SettingsWindowController: NSWindowController {
     let wrapPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let revealCheckbox = NSButton(
         checkboxWithTitle: "Show extracted files in Finder", target: nil, action: nil)
+    let updatesCheckbox = NSButton(
+        checkboxWithTitle: "Check for updates automatically", target: nil, action: nil)
     let compressionControl = NSSegmentedControl(
         labels: ["Faster", "Balanced", "Smaller"], trackingMode: .selectOne, target: nil, action: nil)
     let defaultStatusLabel = NSTextField(labelWithString: "")
@@ -69,7 +71,7 @@ final class SettingsWindowController: NSWindowController {
         launchPopup.target = self
         launchPopup.action = #selector(launchChanged(_:))
 
-        for button in [foldersFirstCheckbox, autoExpandCheckbox, showHiddenCheckbox, revealCheckbox] {
+        for button in [foldersFirstCheckbox, autoExpandCheckbox, showHiddenCheckbox, revealCheckbox, updatesCheckbox] {
             button.target = self
             button.action = #selector(checkboxChanged(_:))
             button.font = .systemFont(ofSize: 13)
@@ -148,12 +150,14 @@ final class SettingsWindowController: NSWindowController {
             [Self.label("Compression:"), compressionStack],
             [Self.separator(), NSGridCell.emptyContentView],
             [Self.label("Default App:"), defaultStack],
+            [Self.separator(), NSGridCell.emptyContentView],
+            [Self.label("Updates:"), updatesCheckbox],
         ])
         grid.rowSpacing = 10
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
         grid.rowAlignment = .firstBaseline
-        for rowIndex in [1, 3, 7, 9] {
+        for rowIndex in [1, 3, 7, 9, 11] {
             grid.mergeCells(
                 inHorizontalRange: NSRange(location: 0, length: 2),
                 verticalRange: NSRange(location: rowIndex, length: 1))
@@ -221,6 +225,7 @@ final class SettingsWindowController: NSWindowController {
         case .never: wrapPopup.selectItem(at: 2)
         }
         revealCheckbox.state = settings.revealExtractedInFinder ? .on : .off
+        updatesCheckbox.state = settings.checksForUpdates ? .on : .off
 
         switch settings.compressionLevel {
         case .fast: compressionControl.selectedSegment = 0
@@ -258,6 +263,7 @@ final class SettingsWindowController: NSWindowController {
         case autoExpandCheckbox: settings.autoExpandSingleFolder = on
         case showHiddenCheckbox: settings.showHiddenFiles = on
         case revealCheckbox: settings.revealExtractedInFinder = on
+        case updatesCheckbox: settings.checksForUpdates = on
         default: break
         }
     }

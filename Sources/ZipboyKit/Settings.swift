@@ -44,6 +44,7 @@ public final class Settings: @unchecked Sendable {
         static let launchCount = "launchCount"
         static let hasOfferedDefaultZipHandler = "hasOfferedDefaultZipHandler"
         static let hasSeenWelcome = "hasSeenWelcome"
+        static let checksForUpdates = "checksForUpdates"
 
         static let all = [
             launchBehavior,
@@ -54,6 +55,7 @@ public final class Settings: @unchecked Sendable {
             wrapExtractedFiles,
             revealExtractedInFinder,
             compressionLevel,
+            checksForUpdates,
         ]
     }
 
@@ -67,6 +69,7 @@ public final class Settings: @unchecked Sendable {
             Key.wrapExtractedFiles: WrapBehavior.whenMultipleItems.rawValue,
             Key.revealExtractedInFinder: true,
             Key.compressionLevel: CompressionLevel.balanced.rawValue,
+            Key.checksForUpdates: true,
         ]
     }
 
@@ -176,6 +179,15 @@ public final class Settings: @unchecked Sendable {
         guard launchCount >= 3, !hasOfferedDefaultZipHandler else { return false }
         hasOfferedDefaultZipHandler = true
         return true
+    }
+
+    /// Whether Zipboy looks once a day for a newer release. Checking from the menu works either way.
+    public var checksForUpdates: Bool {
+        get { defaults.bool(forKey: Key.checksForUpdates) }
+        set {
+            defaults.set(newValue, forKey: Key.checksForUpdates)
+            notify()
+        }
     }
 
     public var hasSeenWelcome: Bool {

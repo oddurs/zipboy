@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Testing
 import ZipboyKit
@@ -559,5 +560,73 @@ final class RecordingNotifier: Notifier {
         #expect(Scripting.urls(from: a) == [a])
         #expect(Scripting.urls(from: [a, a] as [Any]) == [a, a])
         #expect(Scripting.urls(from: "not a file").isEmpty)
+    }
+}
+
+/// Offering a newer Zipboy, with the network and the defaults replaced.
+@MainActor
+@Suite struct UpdaterTests {
+    func updater(latest: String, disk: Data = Data("image".utf8), sum: String? = nil) -> Updater {
+        let updater = Updater()
+        let suite = "com.oddurs.zipboy.updatertests.\(UUID().uuidString)"
+        updater.defaults = UserDefaults(suiteName: suite)!
+        updater.settings = Settings(defaults: UserDefaults(suiteName: suite)!)
+        updater.localVersion = "0.4.0"
+        let base = "https://github.com/oddurs/zipboy/releases/download/v\(latest)"
+        let feed = Data(
+            #"""
+            {"tag_name": "v\#(latest)", "html_url": "https://github.com/oddurs/zipboy/releases/tag/v\#(latest)",
+             "prerelease": false, "assets": [
+               {"name": "Zipboy-\#(latest).dmg", "browser_download_url": "\#(base)/Zipboy-\#(latest).dmg"},
+               {"name": "Zipboy-\#(latest).dmg.sha256", "browser_download_url": "\#(base)/Zipboy-\#(latest).dmg.sha256"}]}
+            """#.utf8)
+        let digest = sum ?? SHA256.hash(data: disk).map { String(format: "%02x", $0) }.joined()
+        updater.fetch = { url in
+            switch url.pathExtension {
+            case "dmg": disk
+            case "sha256": Data("\(digest)  Zipboy-\(latest).dmg\n".utf8)
+            default: feed
+            }
+        }
+        return updater
+    }
+
+    @Test func offersANewerReleaseOnceADay() async {
+        let updater = updater(latest: "0.4.1")
+        let now = Date()
+        guard case .offer(let release) = await updater.check(manual: false, now: now) else {
+            Issue.record("no offer")
+            return
+        }
+        #expect(release.version == "0.4.1")
+        // Not again within the day, nor the same version on a later day.
+        #expect(await updater.check(manual: false, now: now.addingTimeInterval(3_600)) == .quiet)
+        #expect(await updater.check(manual: false, now: now.addingTimeInterval(90_000)) == .quiet)
+        // Asked for, it always answers.
+        #expect(await updater.check(manual: true, now: now) == .offer(release))
+    }
+
+    @Test func saysUpToDateOnlyWhenAsked() async {
+        let updater = updater(latest: "0.4.0")
+        #expect(await updater.check(manual: false) == .quiet)
+        #expect(await updater.check(manual: true) == .upToDate)
+    }
+
+    @Test func turnedOffItStaysQuietUntilAsked() async {
+        let updater = updater(latest: "0.4.1")
+        updater.settings.checksForUpdates = false
+        #expect(await updater.check(manual: false) == .quiet)
+        #expect(await updater.check(manual: true) != .quiet)
+    }
+
+    @Test func aDownloadThatDoesntMatchIsRefused() async throws {
+        let good = updater(latest: "0.4.1")
+        guard case .offer(let release) = await good.check(manual: true) else { return }
+        let disk = try await good.download(release)
+        #expect(try Data(contentsOf: disk) == Data("image".utf8))
+
+        let tampered = updater(latest: "0.4.1", sum: String(repeating: "0", count: 64))
+        await #expect(throws: Updater.Failure.self) { try await tampered.download(release) }
+        #expect(!FileManager.default.fileExists(atPath: disk.path))
     }
 }

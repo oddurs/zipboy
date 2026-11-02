@@ -24,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
         // Every launch counts toward the third, when Zipboy offers once to open ZIPs; the welcome only
         // keeps the two from landing on the same launch.
+        // Past the test guard, so a test run never reaches for the network.
+        Updater.shared.checkIfDue()
         let offer = Settings.shared.recordLaunchAndShouldOfferDefaultHandler()
         if Settings.shared.shouldShowWelcomeOnce() {
             // After the first window, so the welcome sits in front of it.
