@@ -47,26 +47,31 @@ build)
     # One build per architecture, joined with lipo: `--arch a --arch b`
     # needs Xcode's build system, which Command Line Tools lack.
     bins=""
-    previews=""
+    extensions="ZipboyQuickLook ZipboyThumbnail"
     for arch in arm64 x86_64; do
         echo "==> building release for $arch"
         swift build -c release --triple "$arch-apple-macosx14.0"
         dir="$(swift build -c release --triple "$arch-apple-macosx14.0" --show-bin-path)"
         bins="$bins $dir/Zipboy"
-        previews="$previews $dir/ZipboyQuickLook"
     done
     app="build/Zipboy.app"
-    preview="$app/Contents/PlugIns/ZipboyQuickLook.appex"
     echo "==> assembling $app"
     rm -rf "$app"
-    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$preview/Contents/MacOS"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     # shellcheck disable=SC2086
     lipo -create $bins -output "$app/Contents/MacOS/Zipboy"
-    # shellcheck disable=SC2086
-    lipo -create $previews -output "$preview/Contents/MacOS/ZipboyQuickLook"
     cp Resources/Info.plist "$app/Contents/"
-    cp Resources/QuickLook/Info.plist "$preview/Contents/"
     cp Resources/AppIcon.icns "$app/Contents/Resources/"
+    # Each Quick Look extension is a bundle of its own in PlugIns, its plist in Resources/<name>/.
+    for ext in $extensions; do
+        appex="$app/Contents/PlugIns/$ext.appex"
+        mkdir -p "$appex/Contents/MacOS"
+        lipo -create \
+            "$(swift build -c release --triple arm64-apple-macosx14.0 --show-bin-path)/$ext" \
+            "$(swift build -c release --triple x86_64-apple-macosx14.0 --show-bin-path)/$ext" \
+            -output "$appex/Contents/MacOS/$ext"
+        cp "Resources/${ext#Zipboy}/Info.plist" "$appex/Contents/"
+    done
     if exact_tag="$(git describe --tags --exact-match 2>/dev/null)"; then
         short_ver="${exact_tag#v}"
     else
@@ -74,12 +79,14 @@ build)
         short_ver="${latest_tag#v}-dev"
     fi
     build_num="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
-    for plist in "$app/Contents/Info.plist" "$preview/Contents/Info.plist"; do
+    for plist in "$app/Contents/Info.plist" "$app"/Contents/PlugIns/*.appex/Contents/Info.plist; do
         /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $short_ver" "$plist"
         /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_num" "$plist"
     done
-    # Inside out: the extension is sealed, sandboxed as every app extension must be, before the app.
-    codesign --force --sign - --options runtime --entitlements Resources/QuickLook/QuickLook.entitlements "$preview"
+    # Inside out: each extension is sealed, sandboxed as every app extension must be, before the app.
+    for appex in "$app"/Contents/PlugIns/*.appex; do
+        codesign --force --sign - --options runtime --entitlements Resources/QuickLook/QuickLook.entitlements "$appex"
+    done
     codesign --force --sign - --options runtime "$app"
     echo "==> built $app"
     ;;
@@ -94,13 +101,14 @@ package)
     "$0" build
     app="build/Zipboy.app"
     echo "==> stamping $app as $version"
-    preview="$app/Contents/PlugIns/ZipboyQuickLook.appex"
-    for plist in "$app/Contents/Info.plist" "$preview/Contents/Info.plist"; do
+    for plist in "$app/Contents/Info.plist" "$app"/Contents/PlugIns/*.appex/Contents/Info.plist; do
         /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$plist"
         /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(git rev-list --count HEAD)" "$plist"
     done
     # Changing Info.plist breaks the seal, so sign again, inside out.
-    codesign --force --sign - --options runtime --entitlements Resources/QuickLook/QuickLook.entitlements "$preview"
+    for appex in "$app"/Contents/PlugIns/*.appex; do
+        codesign --force --sign - --options runtime --entitlements Resources/QuickLook/QuickLook.entitlements "$appex"
+    done
     codesign --force --sign - --options runtime "$app"
     dmg="build/Zipboy-$version.dmg"
     stage="build/dmg"

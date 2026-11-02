@@ -53,25 +53,32 @@ import Testing
         #expect(imported.contains { $0["UTTypeIdentifier"] as? String == "com.rarlab.rar-archive" })
     }
 
-    @Test func theQuickLookExtensionPreviewsOnlyWhatTheAppOpens() throws {
-        let data = try Data(contentsOf: Self.root.appendingPathComponent("Resources/QuickLook/Info.plist"))
+    @Test(arguments: [
+        ("QuickLook", "ZipboyQuickLook", "PreviewProvider", "com.apple.quicklook.preview"),
+        ("Thumbnail", "ZipboyThumbnail", "ThumbnailProvider", "com.apple.quicklook.thumbnail"),
+    ])
+    func eachQuickLookExtensionCoversOnlyWhatTheAppOpens(
+        folder: String, executable: String, provider: String, point: String
+    ) throws {
+        let data = try Data(contentsOf: Self.root.appendingPathComponent("Resources/\(folder)/Info.plist"))
         let info = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
         let ext = try #require(info["NSExtension"] as? [String: Any])
         // An extension's identifier must sit under its app's, or the system won't load it.
         #expect((info["CFBundleIdentifier"] as? String)?.hasPrefix("com.oddurs.zipboy.") == true)
-        #expect(info["CFBundleExecutable"] as? String == "ZipboyQuickLook")
-        #expect(ext["NSExtensionPointIdentifier"] as? String == "com.apple.quicklook.preview")
+        // scripts/task copies the SwiftPM product of this name, and finds the plist by the folder.
+        #expect(info["CFBundleExecutable"] as? String == executable)
+        #expect(executable == "Zipboy\(folder)")
+        #expect(ext["NSExtensionPointIdentifier"] as? String == point)
         // The class Quick Look instantiates, by its Objective-C name.
-        let provider = try String(
-            contentsOf: Self.root.appendingPathComponent("Sources/ZipboyQuickLook/PreviewProvider.swift"),
-            encoding: .utf8)
-        #expect(provider.contains("@objc(\(try #require(ext["NSExtensionPrincipalClass"] as? String)))"))
+        let source = try String(
+            contentsOf: Self.root.appendingPathComponent("Sources/\(executable)/\(provider).swift"), encoding: .utf8)
+        #expect(source.contains("@objc(\(try #require(ext["NSExtensionPrincipalClass"] as? String)))"))
 
         let attributes = try #require(ext["NSExtensionAttributes"] as? [String: Any])
-        let previewed = try #require(attributes["QLSupportedContentTypes"] as? [String])
+        let covered = try #require(attributes["QLSupportedContentTypes"] as? [String])
         let types = try #require(Self.infoPlist()["CFBundleDocumentTypes"] as? [[String: Any]])
         let opened = Set(types.flatMap { $0["LSItemContentTypes"] as? [String] ?? [] })
-        for type in previewed { #expect(opened.contains(type), "\(type) is previewed but the app can't open it") }
+        for type in covered { #expect(opened.contains(type), "\(type) is covered but the app can't open it") }
     }
 
     @Test func shipsItsIcon() throws {

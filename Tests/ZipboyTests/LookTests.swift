@@ -309,13 +309,14 @@ import ZipboyKit
         #expect(!browser.outline.isItemExpanded(folderNode))
 
         browser.scheduleSpringLoad(for: folderNode)
-        // Waits for the folder to open rather than a fixed time: another suite can hold the main thread
-        // for seconds, and a fixed sleep then loses the race and fails for nothing.
+        // By path, not by node: SettingsTests runs alongside and changes settings, which reloads every
+        // list with fresh nodes, so the one in hand may no longer be the row's. And it waits for the
+        // folder to open rather than a fixed time, since another suite can hold the main thread.
         let deadline = ContinuousClock.now + .seconds(5)
-        while !browser.outline.isItemExpanded(folderNode), ContinuousClock.now < deadline {
+        while !browser.savedState.expanded.contains("FolderA"), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        #expect(browser.outline.isItemExpanded(folderNode))
+        #expect(browser.savedState.expanded.contains("FolderA"))
     }
 
     /// An archive holding `names` as small files at its top level, shown in a list inside a window.
