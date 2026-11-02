@@ -45,6 +45,17 @@ import Testing
         #expect(try Self.source("ArchiveDocument.swift").contains("zipType = \"public.zip-archive\""))
     }
 
+    @Test func zipsZipboyOwnsGetADocumentIconMadeFromMugi() throws {
+        let types = try #require(Self.infoPlist()["CFBundleDocumentTypes"] as? [[String: Any]])
+        // The system draws the app icon onto a document page, so the type it writes, and only that,
+        // reads as Zipboy's once Zipboy opens ZIPs. Types it only imports keep their own icons.
+        for type in types {
+            let owned = type["CFBundleTypeRole"] as? String == "Editor"
+            #expect(
+                (type["CFBundleTypeIconSystemGenerated"] as? Int == 1) == owned, "\(type["CFBundleTypeName"] ?? "")")
+        }
+    }
+
     @Test func declaresRarSinceMacOSDoesNot() throws {
         let types = try #require(Self.infoPlist()["CFBundleDocumentTypes"] as? [[String: Any]])
         let viewed = types.flatMap { $0["LSItemContentTypes"] as? [String] ?? [] }
