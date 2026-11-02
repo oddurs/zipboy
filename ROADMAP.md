@@ -4,7 +4,7 @@
 
 ## v0.1 — First release
 
-`##########` 94% · 17 of 18 done · due 2026-11-20
+`##########` 95% · 18 of 19 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
 
@@ -31,6 +31,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [x] `0060` Make the repository agent-native <sup>chore · p1 · quality</sup>
 - [x] `0061` License Zipboy under MIT <sup>docs · p1 · distribution</sup>
 - [x] `0076` Polish every surface of the app until nothing looks unconsidered <sup>feature · p2 · shell</sup>
+- [x] `0077` Drop the neon theme for the stock Mac look and tighten every interaction <sup>feature · p2 · shell</sup>
 
 ## v0.2 — Saves in seconds
 

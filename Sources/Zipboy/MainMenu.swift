@@ -72,7 +72,8 @@ enum MainMenu {
                 "New Folder", #selector(BrowserViewController.newFolder(_:)), "n", [.command, .shift],
                 symbol: "folder.badge.plus"))
         menu.addItem(.separator())
-        menu.addItem(item("Extract", #selector(BrowserViewController.extract(_:)), "e", symbol: "arrow.down.to.line"))
+        menu.addItem(
+            item("Extract", #selector(BrowserViewController.extract(_:)), "e", symbol: "square.and.arrow.down"))
         menu.addItem(
             item(
                 "Extract To…", #selector(BrowserViewController.extractTo(_:)), "e", [.command, .option],

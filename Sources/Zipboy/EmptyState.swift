@@ -1,12 +1,13 @@
 import AppKit
 
-/// What the list shows when it has nothing to list: a tray to drop files into, the archive unzipping
-/// while it opens, or that a search found nothing. It sits inside the outline, so drops land on the
-/// list; only its button takes clicks.
+/// What the list shows when it has nothing to list, laid out as the system's content-unavailable views
+/// are: a symbol, a heading, a line of help, and at most one button. It sits inside the outline, so
+/// drops land on the list; only its button takes clicks.
 @MainActor
 final class EmptyStateView: NSView {
     enum Mode: Equatable {
-        case drop, noResults
+        case drop
+        case noResults(String)
         case loading(Double)
     }
 
@@ -14,63 +15,60 @@ final class EmptyStateView: NSView {
         didSet { if mode != oldValue { update() } }
     }
 
-    /// Something is being dragged over the empty list.
+    /// Something that would be accepted is being dragged over the empty list.
     var highlighted = false {
-        didSet { if highlighted != oldValue { updateHighlight() } }
+        didSet { if highlighted != oldValue { updateHighlight(bouncing: highlighted) } }
     }
 
-    private let tray = NSView()
-    private let border = CAShapeLayer()
+    /// The drop area: a dashed outline at rest, the accent colour while a drop is waiting.
+    private let area = CAShapeLayer()
     private let glyph = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
+    private let progress = NSProgressIndicator()
     /// The window's one prominent action while there is nothing else to act on: the inspector hides
     /// its footer for an empty archive.
-    private let choose = ActionButton(
+    private let choose = NSButton.push(
         "Choose Files…", action: #selector(BrowserViewController.addFiles(_:)), prominent: true)
-    private let zipper = ZipperProgressView()
     private let stack: NSStackView
 
     override init(frame: NSRect) {
-        stack = NSStackView(views: [glyph, zipper, title, detail, choose])
+        stack = NSStackView(views: [glyph, title, detail, progress, choose])
         super.init(frame: frame)
+        wantsLayer = true
+        layer?.addSublayer(area)
+        area.lineWidth = 1.5
+        area.lineCap = .round
 
-        tray.wantsLayer = true
-        tray.layer?.addSublayer(border)
-        border.fillColor = nil
-        border.lineWidth = 1.5
-        border.lineDashPattern = [8, 6]
-        border.lineCap = .round
-        tray.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(tray)
-
-        glyph.symbolConfiguration = .init(pointSize: 36, weight: .light)
+        glyph.symbolConfiguration = .init(pointSize: 44, weight: .light)
         title.font = Theme.Font.heading
         title.alignment = .center
-        detail.font = Theme.Font.callout
-        detail.textColor = .secondaryLabelColor
+        title.textColor = .secondaryLabelColor
+        detail.font = Theme.Font.body
+        detail.textColor = .tertiaryLabelColor
         detail.alignment = .center
+        progress.style = .bar
+        progress.isIndeterminate = false
+        progress.minValue = 0
+        progress.maxValue = 1
+        progress.controlSize = .small
         choose.setAccessibilityLabel("Choose files to add")
 
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = Theme.Space.xs
-        stack.setCustomSpacing(Theme.Space.m, after: glyph)
-        stack.setCustomSpacing(Theme.Space.l, after: zipper)
+        stack.setCustomSpacing(Theme.Space.l, after: glyph)
+        stack.setCustomSpacing(Theme.Space.s, after: title)
         stack.setCustomSpacing(Theme.Space.l, after: detail)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
         NSLayoutConstraint.activate([
-            tray.centerXAnchor.constraint(equalTo: centerXAnchor),
-            tray.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -12),
-            tray.widthAnchor.constraint(equalToConstant: 330),
-            tray.heightAnchor.constraint(equalToConstant: 220),
-            stack.centerXAnchor.constraint(equalTo: tray.centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: tray.centerYAnchor),
-            stack.widthAnchor.constraint(lessThanOrEqualTo: tray.widthAnchor, constant: -2 * Theme.Space.xl),
-            zipper.widthAnchor.constraint(equalToConstant: 240),
-            zipper.heightAnchor.constraint(equalToConstant: 34),
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -Theme.Space.l),
+            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
+            stack.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -2 * Theme.Space.xl),
+            progress.widthAnchor.constraint(equalToConstant: 200),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -87,123 +85,62 @@ final class EmptyStateView: NSView {
 
     override func layout() {
         super.layout()
-        border.frame = tray.bounds
-        border.path = CGPath(
-            roundedRect: tray.bounds.insetBy(dx: 1, dy: 1), cornerWidth: Theme.Radius.l + 4,
-            cornerHeight: Theme.Radius.l + 4, transform: nil)
+        // The whole list is the drop area, inset so its edge sits clear of the window's.
+        let rect = bounds.insetBy(dx: Theme.Space.m, dy: Theme.Space.m)
+        area.frame = bounds
+        area.path = CGPath(
+            roundedRect: rect, cornerWidth: Theme.Radius.l, cornerHeight: Theme.Radius.l, transform: nil)
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateHighlight()
+        updateHighlight(bouncing: false)
     }
 
-    /// Whether the tray's dashes are marching, for tests.
-    var isAnimating: Bool { border.animation(forKey: "march") != nil }
-
     /// The Choose Files… button, for tests.
-    var chooseButton: ActionButton { choose }
+    var chooseButton: NSButton { choose }
+
+    /// The drop area's outline colour, for tests.
+    var outlineColor: CGColor? { area.strokeColor }
 
     private func update() {
         let loading: Double? = if case .loading(let done) = mode { done } else { nil }
-        tray.isHidden = mode != .drop
         glyph.isHidden = loading != nil
-        zipper.isHidden = loading == nil
+        progress.isHidden = loading == nil
         choose.isHidden = mode != .drop
+        area.isHidden = mode != .drop
         switch mode {
         case .drop:
-            glyph.image = NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: nil)
-            title.stringValue = "Drop files here"
+            glyph.image = NSImage(systemSymbolName: "tray.and.arrow.down", accessibilityDescription: nil)
+            title.stringValue = "Drop Files Here"
             detail.stringValue = "Everything you add is zipped as you go."
-        case .noResults:
+        case .noResults(let query):
             glyph.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
-            title.stringValue = "No matches"
-            detail.stringValue = "Nothing in this archive matches that search."
+            title.stringValue = "No Results for “\(query)”"
+            detail.stringValue = "Check the spelling or try a new search."
         case .loading(let done):
-            zipper.progress = done
+            progress.doubleValue = done
             title.stringValue = "Unzipping…"
-            detail.stringValue = "\(Int(done * 100))%"
+            detail.stringValue = ""
+            progress.setAccessibilityValue("\(Int(done * 100)) percent")
         }
-        setAccessibilityLabel([title.stringValue, detail.stringValue].joined(separator: ". "))
-        updateHighlight()
+        detail.isHidden = detail.stringValue.isEmpty
+        setAccessibilityLabel([title.stringValue, detail.stringValue].filter { !$0.isEmpty }.joined(separator: ". "))
+        updateHighlight(bouncing: false)
     }
 
-    private func updateHighlight() {
+    private func updateHighlight(bouncing: Bool) {
         let lit = highlighted && mode == .drop
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            border.strokeColor = (lit ? Theme.accent : NSColor.tertiaryLabelColor).cgColor
-            border.fillColor = (lit ? Theme.dropFill : Theme.well).cgColor
+            area.strokeColor = (lit ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
+            area.fillColor = lit ? NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor : nil
         }
-        // The one spot of brand colour in an empty window, so it reads as Zipboy's, not as an error.
-        glyph.contentTintColor = mode == .drop ? Theme.accent : .tertiaryLabelColor
-        title.textColor = mode == .drop ? .labelColor : .secondaryLabelColor
-
-        border.removeAllAnimations()
-        guard lit, !Theme.reduceMotion() else { return }
-        // The dashes march round the tray, and the glyph hops, while a drop is waiting.
-        let march = CABasicAnimation(keyPath: "lineDashPhase")
-        march.fromValue = 0
-        march.toValue = -28
-        march.duration = 0.6
-        march.repeatCount = .infinity
-        border.add(march, forKey: "march")
-        glyph.addSymbolEffect(.bounce)
-    }
-}
-
-/// Opening an archive, drawn as a zipper coming undone: the slider travels with the progress, the
-/// teeth behind it part, and the teeth ahead stay locked.
-@MainActor
-final class ZipperProgressView: NSView {
-    var progress: Double = 0 {
-        didSet {
-            needsDisplay = true
-            setAccessibilityValue("\(Int(progress * 100)) percent")
+        // Dashes at rest say "a place to put things"; a solid edge says "let go".
+        area.lineDashPattern = lit ? nil : [6, 5]
+        area.lineWidth = lit ? 2.5 : 1.5
+        glyph.contentTintColor = lit ? .controlAccentColor : .tertiaryLabelColor
+        if bouncing, lit, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            glyph.addSymbolEffect(.bounce)
         }
-    }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        translatesAutoresizingMaskIntoConstraints = false
-        setAccessibilityElement(true)
-        setAccessibilityRole(.progressIndicator)
-        setAccessibilityLabel("Unzipping")
-    }
-
-    required init?(coder: NSCoder) { fatalError("ZipperProgressView is built in code") }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let teeth = 22
-        let pitch = (bounds.width - 24) / CGFloat(teeth)
-        let midY = bounds.midY
-        let slider = 12 + CGFloat(min(max(progress, 0), 1)) * (bounds.width - 24)
-        let tooth = NSSize(width: pitch * 0.62, height: 6)
-
-        for index in 0..<teeth {
-            let x = 12 + CGFloat(index) * pitch
-            // Behind the slider the two sides spread apart, wider the further back they are.
-            let behind = x + pitch / 2 < slider
-            let spread: CGFloat = behind ? min(15, 2 + (slider - x) * 0.12) : 0
-            let color = behind ? NSColor.tertiaryLabelColor : Theme.accent
-            color.setFill()
-            NSBezierPath(
-                roundedRect: NSRect(x: x, y: midY + 1 + spread, width: tooth.width, height: tooth.height),
-                xRadius: 2, yRadius: 2
-            ).fill()
-            NSBezierPath(
-                roundedRect: NSRect(
-                    x: x + pitch / 2, y: midY - 1 - tooth.height - spread, width: tooth.width, height: tooth.height),
-                xRadius: 2, yRadius: 2
-            ).fill()
-        }
-
-        // The slider, with its pull tab hanging below.
-        Theme.accent.setFill()
-        NSBezierPath(
-            roundedRect: NSRect(x: slider - 9, y: midY - 7, width: 18, height: 14), xRadius: 5, yRadius: 5
-        ).fill()
-        NSBezierPath(
-            roundedRect: NSRect(x: slider - 3.5, y: midY - 7 - 11, width: 7, height: 13), xRadius: 3.5, yRadius: 3.5
-        ).fill()
     }
 }
