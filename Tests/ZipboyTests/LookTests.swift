@@ -470,3 +470,25 @@ struct PromptKeyboardTests {
         #expect(escapes(Prompts.Conflicts.alert(for: "a.txt", more: true)) == ["Stop"])
     }
 }
+
+@MainActor
+struct AboutTests {
+    @Test func aboutCreditsLibarchiveAndLinksTheProject() {
+        let credits = AppDelegate.credits
+        #expect(credits.string.contains("libarchive"))
+        var links: [URL] = []
+        credits.enumerateAttribute(.link, in: NSRange(location: 0, length: credits.length)) { value, _, _ in
+            if let url = value as? URL { links.append(url) }
+        }
+        #expect(
+            links.map(\.absoluteString) == [
+                "https://github.com/oddurs/zipboy", "https://github.com/oddurs/zipboy/issues",
+            ])
+
+        // The menu registers the Services and Help menus with NSApp, which must exist first.
+        _ = NSApplication.shared
+        let about = MainMenu.make().items.first?.submenu?.items.first
+        #expect(about?.title == "About Zipboy")
+        #expect(about?.action == #selector(AppDelegate.showAbout(_:)))
+    }
+}
