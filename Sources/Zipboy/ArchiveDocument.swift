@@ -90,6 +90,8 @@ final class ArchiveDocument: NSDocument {
     private(set) var activity: String?
     /// Long work under way, newest last: the window shows the newest with a bar and a stop button.
     private(set) var tasks: [LongTask] = []
+    /// Says a change out loud for VoiceOver. Each document has its own, so a test hears only its own.
+    var announce: (String) -> Void = { Announcer.say($0) }
     /// Copies clone on APFS, which is instant and reports no progress; tests turn it off to have some.
     var cloneWhenCopying = true
     private var saving: Saving?
@@ -415,6 +417,8 @@ final class ArchiveDocument: NSDocument {
                     }
                     self.refreshTrackingAfterSave(to: url, for: saveOperation, identities: identities)
                     self.parentDocument?.childDidSave()
+                    // Autosaves happen all the time and say nothing; a save the person asked for is heard.
+                    if !autosave { self.announce("Saved “\(self.displayName ?? "archive")”") }
                 }
             }
             completionHandler(error)
@@ -908,6 +912,7 @@ final class ArchiveDocument: NSDocument {
             }
         }.value
         try perform(replaced + staged, named: plan.count == 1 ? "Add Item" : "Add Items")
+        announce(plan.count == 1 ? "Added “\(plan[0].name)”" : "Added \(plan.count) items")
         return plan.map { folder.isEmpty ? $0.name : "\(folder)/\($0.name)" }
     }
 
@@ -1006,6 +1011,8 @@ final class ArchiveDocument: NSDocument {
             Move(from: workspace.url($0), to: try workspace.holdingSpot(for: ($0 as NSString).lastPathComponent))
         }
         try perform(moves, named: paths.count == 1 ? "Delete Item" : "Delete Items")
+        announce(
+            paths.count == 1 ? "Deleted “\((paths[0] as NSString).lastPathComponent)”" : "Deleted \(paths.count) items")
     }
 
     func rename(_ path: String, to name: String) throws {
@@ -1077,6 +1084,17 @@ final class LongTask: Sendable {
         self.title = title
         self.started = started
         progress = Progress(totalUnitCount: max(total, 1))
+    }
+}
+
+/// What VoiceOver says when something changes out of the person's sight, such as items landing in the
+/// list.
+@MainActor
+enum Announcer {
+    static func say(_ text: String) {
+        NSAccessibility.post(
+            element: NSApp.mainWindow ?? NSApp as Any, notification: .announcementRequested,
+            userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 }
 
