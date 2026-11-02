@@ -42,6 +42,9 @@ enum MainMenu {
     private static func appMenu() -> NSMenu {
         let menu = NSMenu(title: "Zipboy")
         menu.addItem(item("About Zipboy", #selector(AppDelegate.showAbout(_:))))
+        let updates = item("Check for Updates…", #selector(Updater.checkNow(_:)))
+        updates.target = Updater.shared
+        menu.addItem(updates)
         menu.addItem(.separator())
         menu.addItem(item("Settings…", #selector(AppDelegate.showSettings(_:)), ",", symbol: "gearshape"))
         menu.addItem(.separator())
