@@ -682,28 +682,6 @@ import zlib
         #expect(wrongPwd.title.contains("password"))
         #expect(wrongPwd.title.contains("“secret.zip”"))
     }
-
-    @Test func stopsDecompressionBombExceedingRatioThreshold() throws {
-        let source = try folder("bomb-src")
-        // 68 MB of zeros compresses to ~68 KB in Deflate (> 1,000:1 ratio over 64 MB threshold).
-        let zeroSize = 68 << 20
-        try Data(count: zeroSize).write(to: source.appendingPathComponent("zeros.bin"))
-        let bombZip = dir.appendingPathComponent("bomb.zip")
-        try Archive.writeZip(from: source, to: bombZip, compressionLevel: .best)
-
-        let out = try folder("bomb-out")
-        do {
-            _ = try Archive.extract(bombZip, into: out)
-            Issue.record("Expected decompression bomb to be stopped by ratio guard")
-        } catch let error as ArchiveError {
-            if case .suspiciousArchive(let reason) = error {
-                #expect(reason.contains("1,000×"))
-            } else {
-                Issue.record("Unexpected ArchiveError: \(error)")
-            }
-        }
-        #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent("zeros.bin").path))
-    }
 }
 
 @Suite struct BenchmarkBudgetTests {

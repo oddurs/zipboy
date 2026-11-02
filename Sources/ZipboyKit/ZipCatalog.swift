@@ -77,7 +77,8 @@ public struct ZipCatalog: Equatable, Sendable {
         if eocdPos >= 20, readU32(tail, eocdPos - 20) == 0x0706_4b50 {
             locatorOffset = tailStart + UInt64(eocdPos - 20)
             let z64Offset = readU64(tail, eocdPos - 12)
-            guard z64Offset + 56 <= eocdFileOffset else {
+            // Every offset below comes from the file; compare by subtraction so a hostile value can't overflow.
+            guard eocdFileOffset >= 56, z64Offset <= eocdFileOffset - 56 else {
                 throw ArchiveError.unreadable("Zip64 End of Central Directory offset is out of bounds.")
             }
             try handle.seek(toOffset: z64Offset)
@@ -195,8 +196,8 @@ public struct ZipCatalog: Equatable, Sendable {
                 ePos = fieldEnd
             }
 
-            guard localOffset + 30 <= cdOffset,
-                compSize <= cdOffset - (localOffset + 30)
+            guard cdOffset >= 30, localOffset <= cdOffset - 30,
+                compSize <= cdOffset - 30 - localOffset
             else {
                 throw ArchiveError.unreadable("Entry local header or payload extends into the Central Directory.")
             }
@@ -230,7 +231,8 @@ public struct ZipCatalog: Equatable, Sendable {
                 "Central Directory entry count (\(rawRecords.count)) does not match header (\(totalEntries)).")
         }
 
-        // Verify that no two entries claim overlapping local header regions.
+        // Verify that no two entries claim overlapping local header regions. Each record's offset plus
+        // compressed size is already bounded by the directory's offset, so these sums can't overflow.
         let byOffset = rawRecords.sorted { $0.localHeaderOffset < $1.localHeaderOffset }
         for i in 0..<byOffset.count where i + 1 < byOffset.count {
             let current = byOffset[i]
