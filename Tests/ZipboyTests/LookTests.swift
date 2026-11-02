@@ -35,6 +35,7 @@ import ZipboyKit
         #expect(view.accessibilityRole() == .group)
         #expect(view.accessibilityLabel()?.contains("Drop files here") == true)
         #expect(view.chooseButton.accessibilityLabel() == "Choose files to add")
+        #expect(view.chooseButton.prominent)
 
         view.mode = .loading(0.42)
         #expect(view.accessibilityLabel()?.contains("Unzipping") == true)
@@ -149,6 +150,120 @@ import ZipboyKit
         #expect(inspector.primary.prominent)
         #expect(!inspector.secondary.prominent)
         #expect(inspector.primary.accessibilityLabel() == "Extract All")
+    }
+
+    @Test func theProminentButtonGoesQuietInABackgroundWindow() {
+        let alone = ActionButton("Extract", action: nil, prominent: true)
+        #expect(alone.isLit)
+        #expect(!ActionButton("Verify", action: nil, prominent: false).isLit)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered,
+            defer: true)
+        window.contentView?.addSubview(alone)
+        #expect(!window.isMainWindow)
+        #expect(!alone.isLit)
+    }
+
+    @Test func theInspectorToggleSaysWhatItWillDo() throws {
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        let split = try #require(
+            doc.windowControllers.first?.window?.contentViewController as? InspectorSplitViewController)
+        let item = NSMenuItem(
+            title: "", action: #selector(NSSplitViewController.toggleInspector(_:)), keyEquivalent: "")
+        let inspector = try #require(split.splitViewItems.last)
+        // The split view autosaves whether it's collapsed, so leave it open as the next window expects.
+        defer { inspector.isCollapsed = false }
+        inspector.isCollapsed = false
+        _ = split.validateUserInterfaceItem(item)
+        #expect(item.title == "Hide Inspector")
+        inspector.isCollapsed = true
+        _ = split.validateUserInterfaceItem(item)
+        #expect(item.title == "Show Inspector")
+    }
+
+    @Test func theInspectorHeadingSaysEachThingOnce() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("heading-\(UUID().uuidString).txt")
+        try Data("x".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        try await doc.add([file], into: "") { _ in .keepBoth }
+        let inspector = PreviewViewController()
+
+        inspector.show([], archive: doc)
+        #expect(inspector.subtitle.stringValue == "ZIP archive")
+        let labels = inspector.table.rows.compactMap { $0.accessibilityLabel() }
+        #expect(!labels.contains { $0.hasPrefix("Format:") })
+
+        let node = try #require(doc.tree?.children.first)
+        inspector.show([node], archive: doc)
+        #expect(inspector.subtitle.stringValue == node.kind)
+        #expect(inspector.table.rows.contains { $0.accessibilityLabel()?.hasPrefix("Size:") == true })
+    }
+
+    @Test func contextMenuCommandsCarryTheirSymbols() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("menu-\(UUID().uuidString).txt")
+        try Data("x".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        try await doc.add([file], into: "") { _ in .keepBoth }
+        let browser = BrowserViewController()
+        browser.document = doc
+        browser.reload()
+        let menu = try #require(browser.outline.menu)
+
+        for selected in [IndexSet(), IndexSet(integer: 0)] {
+            browser.outline.selectRowIndexes(selected, byExtendingSelection: false)
+            browser.menuNeedsUpdate(menu)
+            let commands = menu.items.filter { !$0.isSeparatorItem }
+            #expect(!commands.isEmpty)
+            for item in commands { #expect(item.image != nil, "\(item.title) has no symbol") }
+        }
+    }
+
+    @Test func endingASearchPutsBackTheFoldersThatWereOpen() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("search-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("FolderA/Sub"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: dir.appendingPathComponent("FolderA/Sub/a.txt"))
+        try Data("y".utf8).write(to: dir.appendingPathComponent("top.txt"))
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        try await doc.add([dir.appendingPathComponent("FolderA"), dir.appendingPathComponent("top.txt")], into: "") {
+            _ in .keepBoth
+        }
+        let browser = BrowserViewController()
+        browser.document = doc
+        browser.reload()
+        // The list shows its own copy of the tree, so rows are found through the outline.
+        func row(_ path: String) -> Node? {
+            (0..<browser.outline.numberOfRows).lazy.compactMap { browser.outline.item(atRow: $0) as? Node }
+                .first { $0.path == path }
+        }
+        browser.outline.expandItem(try #require(row("FolderA")) as Node)
+
+        browser.filter("nothing matches this")
+        browser.filter("")
+        let folder: Node = try #require(row("FolderA"))
+        let sub: Node = try #require(row("FolderA/Sub"))
+        #expect(browser.outline.isItemExpanded(folder))
+        #expect(!browser.outline.isItemExpanded(sub))
+
+        // What was found and selected stays selected, with its folders opened to show it.
+        browser.filter("a.txt")
+        let match = try #require(row("FolderA/Sub/a.txt"))
+        let found = browser.outline.row(forItem: match)
+        browser.outline.selectRowIndexes([found], byExtendingSelection: false)
+        browser.filter("")
+        #expect(browser.selection.map(\.path) == ["FolderA/Sub/a.txt"])
     }
 
     @Test func settingsWindowReflectsAndRestoresDefaults() {

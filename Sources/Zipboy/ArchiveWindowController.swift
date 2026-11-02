@@ -8,7 +8,7 @@ final class ArchiveWindowController: NSWindowController, NSToolbarDelegate,
 {
     private let browser = BrowserViewController()
     private let preview = PreviewViewController()
-    private let split = NSSplitViewController()
+    private let split = InspectorSplitViewController()
     private let searchItem = NSSearchToolbarItem(itemIdentifier: .search)
 
     init(document: ArchiveDocument) {
@@ -140,7 +140,7 @@ final class ArchiveWindowController: NSWindowController, NSToolbarDelegate,
                 #selector(BrowserViewController.newFolder(_:)))
         case .extract:
             button(
-                identifier, "Extract", "arrow.down.to.line", "Extract next to the archive",
+                identifier, "Extract", "arrow.down.to.line", "Extract the selected items, or everything",
                 #selector(BrowserViewController.extract(_:)))
         case .quickLook:
             button(
@@ -178,6 +178,20 @@ final class ArchiveWindowController: NSWindowController, NSToolbarDelegate,
         item.isBordered = true
         item.action = action
         return item
+    }
+}
+
+/// The list and its inspector. The menu names the toggle for what it will do, as Finder's does,
+/// rather than always offering to show an inspector that is already open.
+@MainActor
+final class InspectorSplitViewController: NSSplitViewController {
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(toggleInspector(_:)), let menuItem = item as? NSMenuItem,
+            let inspector = splitViewItems.last
+        {
+            menuItem.title = inspector.isCollapsed ? "Show Inspector" : "Hide Inspector"
+        }
+        return super.validateUserInterfaceItem(item)
     }
 }
 
