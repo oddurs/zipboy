@@ -33,7 +33,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ## v0.2 — Saves in seconds
 
-`######····` 55% · 12 of 22 done · due 2026-12-18
+`######····` 52% · 12 of 23 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
@@ -49,6 +49,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [ ] `0057` Read Deflate64 ZIPs, which Windows makes for large files <sup>feature · p2 · archive</sup>
 - [ ] `0073` Stop offering to open zstd and lz4 files we can't read <sup>bug · p2 · distribution</sup>
 - [ ] `0074` Move timing budgets out of the unit suite <sup>chore · p2 · quality</sup>
+- [ ] `0075` Count hard links against the bomb guard <sup>bug · p1 · archive</sup>
 
 ### done
 
