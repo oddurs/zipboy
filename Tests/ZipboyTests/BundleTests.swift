@@ -81,6 +81,21 @@ import Testing
         for type in covered { #expect(opened.contains(type), "\(type) is covered but the app can't open it") }
     }
 
+    @Test func theScriptingDictionaryNamesItsCommands() throws {
+        let info = try Self.infoPlist()
+        #expect(info["NSAppleScriptEnabled"] as? Bool == true)
+        let name = try #require(info["OSAScriptingDefinition"] as? String)
+        let sdef = try String(contentsOf: Self.root.appendingPathComponent("Resources/\(name)"), encoding: .utf8)
+        let source = try Self.source("Scripting.swift")
+        // A class name Cocoa scripting can't find makes the command fail with no hint why.
+        let classes = sdef.matches(of: /<cocoa class="(\w+)"/).map { String($0.1) }
+        #expect(classes == ["ZipboyExtractCommand", "ZipboyCompressCommand"])
+        for name in classes { #expect(source.contains("@objc(\(name))")) }
+        // scripts/task copies the dictionary into the bundle beside the icon.
+        let task = try String(contentsOf: Self.root.appendingPathComponent("scripts/task"), encoding: .utf8)
+        #expect(task.contains("Resources/\(name)"))
+    }
+
     @Test func shipsItsIcon() throws {
         let name = try #require(Self.infoPlist()["CFBundleIconFile"] as? String)
         #expect(FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("Resources/\(name).icns").path))
