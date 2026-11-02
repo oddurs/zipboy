@@ -15,12 +15,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
-            NSClassFromString("XCTestCase") == nil,
-            Settings.shared.recordLaunchAndShouldOfferDefaultHandler()
-        {
+        // The Dock icon, About, and alerts follow Dark Mode, switching as the appearance does.
+        appearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.initial]) { app, _ in
+            MainActor.assumeIsolated { app.applicationIconImage = Mugi.appIcon(for: app.effectiveAppearance) }
+        }
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+            NSClassFromString("XCTestCase") == nil
+        else { return }
+        // Every launch counts toward the third, when Zipboy offers once to open ZIPs; the welcome only
+        // keeps the two from landing on the same launch.
+        let offer = Settings.shared.recordLaunchAndShouldOfferDefaultHandler()
+        if Settings.shared.shouldShowWelcomeOnce() {
+            // After the first window, so the welcome sits in front of it.
+            DispatchQueue.main.async { WelcomeWindowController.shared.present() }
+        } else if offer {
             offerDefaultZipHandler()
         }
+    }
+
+    private var appearanceObservation: NSKeyValueObservation?
+
+    @objc func showWelcome(_ sender: Any?) {
+        WelcomeWindowController.shared.present()
     }
 
     @objc func showSettings(_ sender: Any?) {
@@ -40,7 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showAbout(_ sender: Any?) {
-        NSApp.orderFrontStandardAboutPanel(options: [.credits: Self.credits])
+        AboutWindowController.shared.showWindow(sender)
+        AboutWindowController.shared.window?.makeKeyAndOrderFront(sender)
     }
 
     /// What the About panel says beneath the version: what Zipboy is built on, and where to find it.

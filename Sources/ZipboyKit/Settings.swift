@@ -43,6 +43,7 @@ public final class Settings: @unchecked Sendable {
         static let compressionLevel = "compressionLevel"
         static let launchCount = "launchCount"
         static let hasOfferedDefaultZipHandler = "hasOfferedDefaultZipHandler"
+        static let hasSeenWelcome = "hasSeenWelcome"
 
         static let all = [
             launchBehavior,
@@ -174,6 +175,18 @@ public final class Settings: @unchecked Sendable {
         launchCount += 1
         guard launchCount >= 3, !hasOfferedDefaultZipHandler else { return false }
         hasOfferedDefaultZipHandler = true
+        return true
+    }
+
+    public var hasSeenWelcome: Bool {
+        get { defaults.bool(forKey: Key.hasSeenWelcome) }
+        set { defaults.set(newValue, forKey: Key.hasSeenWelcome) }
+    }
+
+    /// True once per account, the first time it's asked: whether to show the welcome on this launch.
+    public func shouldShowWelcomeOnce() -> Bool {
+        guard !hasSeenWelcome else { return false }
+        hasSeenWelcome = true
         return true
     }
 

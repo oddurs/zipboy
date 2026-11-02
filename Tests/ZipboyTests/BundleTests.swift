@@ -96,6 +96,20 @@ import Testing
         #expect(task.contains("Resources/\(name)"))
     }
 
+    @Test func shipsMugi() throws {
+        let task = try String(contentsOf: Self.root.appendingPathComponent("scripts/task"), encoding: .utf8)
+        // The dark icon the running app switches to, and the poses the About window and welcome show.
+        #expect(task.contains("Resources/AppIconDark.icns"))
+        #expect(task.contains("cp -R Resources/Mugi"))
+        for name in ["AppIcon.icns", "AppIconDark.icns", "Icon/mugi-v05-light.png", "Icon/mugi-v05-dark.png"]
+            + ["neutral", "welcome", "presenting", "celebrate"].map({ "Mugi/\($0).png" })
+        {
+            #expect(
+                FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("Resources/\(name)").path),
+                "\(name)")
+        }
+    }
+
     @Test func shipsItsIcon() throws {
         let name = try #require(Self.infoPlist()["CFBundleIconFile"] as? String)
         #expect(FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("Resources/\(name).icns").path))

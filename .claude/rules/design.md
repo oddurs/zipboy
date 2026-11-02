@@ -21,3 +21,6 @@ paths:
   or `viewDidLayout`. System fills (`tertiarySystemFill` and friends) resolve opaque in a layer; use
   `Theme.quiet` or `Theme.well`.
 - `NSStackView`'s `.width` alignment only matches arranged views to each other. Pin widths to the stack.
+- Mugi, the mascot, appears only in quiet moments (About, the welcome), never in the working window.
+  Each pose has the use the Mugi system gives it (`Mugi.Pose`), and `MugiView` stands it on a contact
+  shadow that deepens in Dark Mode. `MugiTests` renders those views in both appearances.
