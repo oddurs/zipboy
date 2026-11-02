@@ -47,7 +47,7 @@ build)
     # One build per architecture, joined with lipo: `--arch a --arch b`
     # needs Xcode's build system, which Command Line Tools lack.
     bins=""
-    extensions="ZipboyQuickLook ZipboyThumbnail"
+    extensions="ZipboyQuickLook ZipboyThumbnail ZipboySpotlight"
     for arch in arm64 x86_64; do
         echo "==> building release for $arch"
         swift build -c release --triple "$arch-apple-macosx14.0"

@@ -155,9 +155,12 @@ Good ideas that are not on the path to v1.0. Items go here instead of being argu
 - [ ] `0048` A `zipboy` command-line tool <sup>feature · p3 · system</sup>
 - [ ] `0049` Write 7z archives <sup>feature · p3 · archive</sup>
 - [ ] `0050` Re-read names in a legacy encoding <sup>feature · p3 · archive</sup>
-- [ ] `0051` Spotlight finds files inside archives <sup>feature · p3 · system</sup>
 - [ ] `0052` Icon and column views <sup>feature · p3 · browser</sup>
 - [ ] `0088` Ask once for a folder's access, so writing beside an archive survives the sandbox <sup>feature · p3 · distribution</sup>
+
+### blocked
+
+- [ ] `0051` Spotlight finds files inside archives <sup>feature · p3 · system</sup>
 
 ### done
 

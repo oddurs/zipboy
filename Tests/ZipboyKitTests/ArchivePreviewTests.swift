@@ -1,3 +1,4 @@
+import CoreSpotlight
 import Foundation
 import Testing
 
@@ -166,5 +167,20 @@ struct HelpTopicsTests {
         #expect(info["HPDBookCSIndexPath"] as? String == "Zipboy.cshelpindex")
         #expect(info["HPDBookIndexPath"] as? String == "Zipboy.helpindex")
         #expect(info["CFBundleIdentifier"] as? String == HelpTopics.bookIdentifier)
+    }
+}
+
+struct SpotlightTests {
+    @Test func theNamesInsideBecomeTheArchivesText() {
+        let listing = ArchiveListing(
+            format: "RAR",
+            entries: [
+                .init(path: "Trip", size: 0, isDirectory: true, modified: nil),
+                .init(path: "Trip/quokka-plan.txt", size: 3, isDirectory: false, modified: nil),
+            ], isTruncated: false, isEncrypted: false, namesHidden: false)
+        let attributes = CSSearchableItemAttributeSet(contentType: .data)
+        Spotlight.describe(listing, into: attributes)
+        #expect(attributes.textContent?.contains("quokka-plan.txt") == true)
+        #expect(attributes.contentDescription == "RAR archive, 1 file")
     }
 }
