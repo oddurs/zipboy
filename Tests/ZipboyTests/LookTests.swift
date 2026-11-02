@@ -136,7 +136,7 @@ import ZipboyKit
         defer { Keychain.deletePassword(for: tempFile, service: service) }
 
         #expect(Keychain.password(for: tempFile, service: service) == nil)
-        #expect(Keychain.setPassword("s3cr3t!", for: tempFile, service: service))
+        try Keychain.setPassword("s3cr3t!", for: tempFile, service: service)
         #expect(Keychain.password(for: tempFile, service: service) == "s3cr3t!")
 
         Keychain.deletePassword(for: tempFile, service: service)
