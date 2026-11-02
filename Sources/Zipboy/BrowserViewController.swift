@@ -45,15 +45,16 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         scroll.autohidesScrollers = true
         scroll.documentView = outline
 
-        addColumn(Self.nameColumn, "Name", width: 320, min: 140, key: .name)
-        addColumn(Self.modifiedColumn, "Date Modified", width: 170, min: 90, key: .modified)
-        addColumn(Self.sizeColumn, "Size", width: 80, min: 60, key: .size, ascending: false)
-        addColumn(Self.kindColumn, "Kind", width: 140, min: 60, key: .kind)
+        addColumn(Self.nameColumn, "Name", width: 300, min: 140, key: .name)
+        addColumn(Self.modifiedColumn, "Date Modified", width: 150, min: 90, key: .modified)
+        addColumn(Self.sizeColumn, "Size", width: 76, min: 60, key: .size, ascending: false)
+        addColumn(Self.kindColumn, "Kind", width: 170, min: 60, key: .kind)
         outline.outlineTableColumn = outline.tableColumns.first
         outline.style = .inset
+        // No stripes: the selection capsule and the column edges carry the rows on their own.
         outline.usesAlternatingRowBackgroundColors = false
-        outline.rowHeight = 24
-        outline.intercellSpacing = NSSize(width: 8, height: 0)
+        outline.rowHeight = 26
+        outline.intercellSpacing = NSSize(width: Theme.Space.s, height: 0)
         outline.allowsMultipleSelection = true
         outline.autoresizesOutlineColumn = false
         // The last column takes up the slack, so rows end where the list does.
@@ -116,7 +117,6 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         if let done = document?.loading {
             empty.mode = .loading(done)
             empty.isHidden = false
-            outline.usesAlternatingRowBackgroundColors = false
             showHeader(false)
             return
         }
@@ -145,7 +145,6 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let hasRows = shown?.children.isEmpty == false
         empty.isHidden = hasRows
         empty.mode = query.isEmpty ? .drop : .noResults
-        outline.usesAlternatingRowBackgroundColors = hasRows
         // Column headers over nothing are noise; they come back with the first item.
         showHeader(tree.children.isEmpty == false)
         selectionChanged()
@@ -625,7 +624,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let cell = NSTableCellView()
         cell.identifier = id
         let field = NSTextField(labelWithString: "")
-        field.lineBreakMode = .byTruncatingMiddle
+        // Names keep both ends, where the extension and any numbering are; kinds and dates read from the start.
+        field.lineBreakMode = id == Self.nameColumn ? .byTruncatingMiddle : .byTruncatingTail
+        field.font = Theme.Font.body
         field.translatesAutoresizingMaskIntoConstraints = false
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         cell.addSubview(field)
@@ -639,7 +640,6 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             image.translatesAutoresizingMaskIntoConstraints = false
             cell.addSubview(image)
             cell.imageView = image
-            field.font = .systemFont(ofSize: 13)
             field.isEditable = true
             field.target = self
             field.action = #selector(nameEdited(_:))
@@ -651,12 +651,11 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
                 field.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6),
             ])
         } else {
-            field.font = .systemFont(ofSize: 12)
             field.textColor = .secondaryLabelColor
             field.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2).isActive = true
             if id == Self.sizeColumn {
                 field.alignment = .right
-                field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+                field.font = Theme.Font.digits
             }
         }
         return cell
@@ -934,7 +933,7 @@ final class BrowserOutlineView: NSOutlineView {
     /// Hears when a drag leaves or finishes, so highlights can go.
     var onDragDone: (() -> Void)?
 
-    /// A system-accent edge round the visible list while a drop would land in the archive's top level.
+    /// A neon edge round the visible list while a drop would land in the archive's top level.
     var rootDropGlow = false {
         didSet { if rootDropGlow != oldValue { needsDisplay = true } }
     }
@@ -942,11 +941,13 @@ final class BrowserOutlineView: NSOutlineView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard rootDropGlow else { return }
-        let edge = NSBezierPath(roundedRect: visibleRect.insetBy(dx: 4, dy: 4), xRadius: 10, yRadius: 10)
+        let edge = NSBezierPath(
+            roundedRect: visibleRect.insetBy(dx: Theme.Space.xs, dy: Theme.Space.xs), xRadius: Theme.Radius.m,
+            yRadius: Theme.Radius.m)
         Theme.dropFill.setFill()
         edge.fill()
         Theme.accent.setStroke()
-        edge.lineWidth = 2
+        edge.lineWidth = 1.5
         edge.stroke()
     }
 

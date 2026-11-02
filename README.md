@@ -41,7 +41,7 @@ Zipboy needs macOS 14 Sonoma or later, on Apple silicon or Intel.
 </picture>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/import-dark.png">
-  <img src="docs/screenshots/import-light.png" alt="A RAR archive opened as a new ZIP, the inspector noting it saves as ZIP" width="49%">
+  <img src="docs/screenshots/import-light.png" alt="A 7z archive opened as a new ZIP, the inspector noting it saves as ZIP" width="49%">
 </picture>
 
 ## What it opens

@@ -46,15 +46,109 @@ import ZipboyKit
         #expect(view.accessibilityLabel()?.contains("No matches") == true)
     }
 
-    @Test func rowsFollowSystemSelectionStyle() {
+    /// WCAG contrast between `text` drawn over `fill` over `ground`, in one appearance.
+    func contrast(_ text: NSColor, on fill: NSColor?, over ground: NSColor, _ name: NSAppearance.Name) -> Double {
+        var result = 0.0
+        NSAppearance(named: name)!.performAsCurrentDrawingAppearance {
+            func rgba(_ color: NSColor) -> [Double] {
+                let c = color.usingColorSpace(.sRGB)!
+                return [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map(Double.init)
+            }
+            func over(_ top: [Double], _ bottom: [Double]) -> [Double] {
+                (0..<3).map { top[$0] * top[3] + bottom[$0] * (1 - top[3]) } + [1]
+            }
+            func luminance(_ c: [Double]) -> Double {
+                let lin = c.prefix(3).map { $0 <= 0.04045 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
+                return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+            }
+            var back = rgba(ground)
+            if let fill { back = over(rgba(fill), back) }
+            let front = over(rgba(text), back)
+            let (a, b) = (luminance(front), luminance(back))
+            result = (max(a, b) + 0.05) / (min(a, b) + 0.05)
+        }
+        return result
+    }
+
+    @Test func selectedRowsKeepTheirTextReadable() {
+        for look in [NSAppearance.Name.aqua, .darkAqua] {
+            let text = contrast(.labelColor, on: Theme.selection, over: .controlBackgroundColor, look)
+            #expect(text >= 4.5, "\(look.rawValue): \(text)")
+        }
+        // Secondary text would fall under 4.5:1 on the tint, so a selected row draws it as primary.
         let row = ArchiveRowView()
-        #expect(Theme.accent == .controlAccentColor)
-        #expect(row.interiorBackgroundStyle == .normal)
+        let cell = NSTableCellView()
+        cell.identifier = NSUserInterfaceItemIdentifier("size")
+        cell.textField = NSTextField(labelWithString: "1 KB")
+        cell.addSubview(cell.textField!)
+        row.addSubview(cell)
         row.isSelected = true
-        row.isEmphasized = true
-        #expect(row.interiorBackgroundStyle == .emphasized)
+        #expect(cell.textField?.textColor == .labelColor)
         row.isSelected = false
+        #expect(cell.textField?.textColor == .secondaryLabelColor)
         #expect(row.interiorBackgroundStyle == .normal)
+    }
+
+    @Test func inkReadsOnNeonAndTheAccentReadsOnTheWindow() {
+        for look in [NSAppearance.Name.aqua, .darkAqua] {
+            let ink = contrast(Theme.ink, on: Theme.neon, over: .windowBackgroundColor, look)
+            #expect(ink >= 4.5, "ink on neon, \(look.rawValue): \(ink)")
+            // Strokes and glyphs are non-text, so 3:1.
+            let accent = contrast(Theme.accent, on: nil, over: .windowBackgroundColor, look)
+            #expect(accent >= 3, "accent, \(look.rawValue): \(accent)")
+        }
+    }
+
+    @Test func theAccentFollowsOnlyWhenThePersonHasNotChosenOne() {
+        let multicolor = Theme.accentDefaults(over: [:])
+        #expect(multicolor["AppleAccentColor"] as? Int == Theme.systemGreen)
+        #expect(multicolor["AppleHighlightColor"] != nil)
+
+        #expect(Theme.accentDefaults(over: ["AppleAccentColor": 4]).isEmpty)
+
+        let ownHighlight = Theme.accentDefaults(over: ["AppleHighlightColor": "1 1 0 Yellow"])
+        #expect(ownHighlight["AppleAccentColor"] as? Int == Theme.systemGreen)
+        #expect(ownHighlight["AppleHighlightColor"] == nil)
+    }
+
+    @Test func infoTableRowsShareTheirEdges() {
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 400))
+        let table = InfoTable()
+        host.addSubview(table)
+        NSLayoutConstraint.activate([
+            table.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            table.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            table.topAnchor.constraint(equalTo: host.topAnchor),
+        ])
+        table.show([
+            ("Size", "1 KB"),
+            nil,
+            ("Where", "Top level"),
+            ("SHA-256", String(repeating: "ab", count: 32)),
+            ("Modified", "Nov 1, 2026 at 8:05 PM"),
+        ])
+        host.layoutSubtreeIfNeeded()
+        #expect(table.rows.count == 4)
+        for row in table.rows {
+            let frame = row.convert(row.bounds, to: host)
+            #expect(frame.minX == 0)
+            #expect(frame.maxX == 280)
+        }
+    }
+
+    @Test func theInspectorOffersOneProminentAction() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("inspect-\(UUID().uuidString).txt")
+        try Data("x".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        try await doc.add([file], into: "") { _ in .keepBoth }
+        let inspector = PreviewViewController()
+        inspector.show([], archive: doc)
+        #expect(inspector.primary.prominent)
+        #expect(!inspector.secondary.prominent)
+        #expect(inspector.primary.accessibilityLabel() == "Extract All")
     }
 
     @Test func settingsWindowReflectsAndRestoresDefaults() {
