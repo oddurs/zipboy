@@ -68,8 +68,9 @@ import ZipboyKit
     @Test(arguments: [
         ("QuickLook", "ZipboyQuickLook", "PreviewProvider", "com.apple.quicklook.preview"),
         ("Thumbnail", "ZipboyThumbnail", "ThumbnailProvider", "com.apple.quicklook.thumbnail"),
+        ("Spotlight", "ZipboySpotlight", "ImportProvider", "com.apple.spotlight.import"),
     ])
-    func eachQuickLookExtensionCoversOnlyWhatTheAppOpens(
+    func eachExtensionCoversOnlyWhatTheAppOpens(
         folder: String, executable: String, provider: String, point: String
     ) throws {
         let data = try Data(contentsOf: Self.root.appendingPathComponent("Resources/\(folder)/Info.plist"))
@@ -87,7 +88,8 @@ import ZipboyKit
         #expect(source.contains("@objc(\(try #require(ext["NSExtensionPrincipalClass"] as? String)))"))
 
         let attributes = try #require(ext["NSExtensionAttributes"] as? [String: Any])
-        let covered = try #require(attributes["QLSupportedContentTypes"] as? [String])
+        let covered = try #require(
+            (attributes["QLSupportedContentTypes"] ?? attributes["CSSupportedContentTypes"]) as? [String])
         let types = try #require(Self.infoPlist()["CFBundleDocumentTypes"] as? [[String: Any]])
         let opened = Set(types.flatMap { $0["LSItemContentTypes"] as? [String] ?? [] })
         for type in covered { #expect(opened.contains(type), "\(type) is covered but the app can't open it") }

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Zipboy Spotlight</string>
+	<key>CFBundleExecutable</key>
+	<string>ZipboySpotlight</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.oddurs.zipboy.spotlight</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>ZipboySpotlight</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>CSSupportedContentTypes</key>
+			<array>
+				<string>public.zip-archive</string>
+				<string>com.sun.java-archive</string>
+				<string>com.winzip.zipx-archive</string>
+				<string>com.rarlab.rar-archive</string>
+				<string>org.7-zip.7-zip-archive</string>
+				<string>public.tar-archive</string>
+				<string>org.gnu.gnu-zip-tar-archive</string>
+				<string>public.tar-bzip2-archive</string>
+				<string>org.tukaani.tar-xz-archive</string>
+				<string>public.cpio-archive</string>
+				<string>org.gnu.gnu-zip-archive</string>
+				<string>public.bzip2-archive</string>
+				<string>org.tukaani.xz-archive</string>
+				<string>public.lha-archive</string>
+				<string>com.microsoft.cab</string>
+			</array>
+		</dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.spotlight.import</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>ZipboyImportProvider</string>
+	</dict>
+</dict>
+</plist>

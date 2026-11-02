@@ -37,6 +37,16 @@ let package = Package(
             ]
         ),
         // Timing budgets, run by scripts/bench in a release build rather than in the test suite.
+        // Spotlight's importer, so names inside archives can be found.
+        .executableTarget(
+            name: "ZipboySpotlight",
+            dependencies: ["ZipboyKit"],
+            swiftSettings: [.unsafeFlags(["-application-extension"])],
+            linkerSettings: [
+                .linkedFramework("CoreSpotlight"),
+                .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain", "-Xlinker", "-application_extension"]),
+            ]
+        ),
         .executableTarget(name: "ZipboyBench", dependencies: ["ZipboyKit"]),
         // Writes the Apple Help Book from HelpTopics, at build time.
         .executableTarget(name: "ZipboyHelpBook", dependencies: ["ZipboyKit"]),
