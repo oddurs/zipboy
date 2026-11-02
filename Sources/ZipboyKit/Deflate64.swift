@@ -42,11 +42,11 @@ enum Deflate64 {
     /// Before each window is written, `admit` hears its size and the compressed bytes read so far, and
     /// throws to stop a bomb; an entry that outgrows its declared size stops at that point too.
     static func extract(
-        named rawName: String, occurrence: Int, from zipURL: URL, to out: FileHandle,
+        named rawName: String, occurrence: Int, from zipURL: URL, encoding: TextEncoding, to out: FileHandle,
         budget: inout Int64?, capacity: () -> Int64?, report: () throws -> Void,
         admit: (_ bytes: Int64, _ consumed: UInt64) throws -> Void
     ) throws {
-        let slice = try locateEntry(named: rawName, occurrence: occurrence, in: zipURL)
+        let slice = try locateEntry(named: rawName, occurrence: occurrence, in: zipURL, encoding: encoding)
         let reader = try FileHandle(forReadingFrom: zipURL)
         defer { try? reader.close() }
         try reader.seek(toOffset: slice.dataOffset)
@@ -208,8 +208,10 @@ enum Deflate64 {
     }
 
     /// Reads the Central Directory of `zipURL` to locate the `occurrence`-th Deflate64 entry whose
-    /// stored name (decoded the same way `Archive.name(of:in:)` does) matches `rawName`.
-    private static func locateEntry(named rawName: String, occurrence: Int, in zipURL: URL) throws -> EntrySlice {
+    /// stored name, decoded with `encoding` and its UTF-8 flag as `Archive.name(of:in:)` does, matches `rawName`.
+    private static func locateEntry(
+        named rawName: String, occurrence: Int, in zipURL: URL, encoding: TextEncoding
+    ) throws -> EntrySlice {
         let handle = try FileHandle(forReadingFrom: zipURL)
         defer { try? handle.close() }
         let fileSize = try handle.seekToEnd()
@@ -251,6 +253,7 @@ enum Deflate64 {
         var pos = 0
         var seen = 0
         while pos + 46 <= cd.count, cd.u32(at: pos) == 0x0201_4B50 {
+            let utf8Flagged = cd.u16(at: pos + 8) & (1 << 11) != 0
             let entryMethod = cd.u16(at: pos + 10)
             let crc = cd.u32(at: pos + 16)
             var compSize = UInt64(cd.u32(at: pos + 20))
@@ -289,7 +292,7 @@ enum Deflate64 {
                 ePos += 4 + size
             }
 
-            let entryName = Archive.decodeZipName(nameData)
+            let entryName = encoding.decode(nameData, utf8Flagged: utf8Flagged)
             if entryMethod == method, entryName == rawName {
                 if seen == occurrence {
                     guard fileSize >= 30, localOffset <= fileSize - 30 else {

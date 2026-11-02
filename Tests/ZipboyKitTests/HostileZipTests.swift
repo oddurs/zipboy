@@ -77,7 +77,8 @@ import zlib
         var budget: Int64?
         let error = #expect(throws: ArchiveError.self) {
             try Deflate64.extract(
-                named: "big.bin", occurrence: 0, from: zip, to: out, budget: &budget, capacity: { nil }, report: {},
+                named: "big.bin", occurrence: 0, from: zip, encoding: .auto, to: out, budget: &budget,
+                capacity: { nil }, report: {},
                 admit: { _, _ in })
         }
         #expect(error.map(isUnreadable) == true)
@@ -93,7 +94,8 @@ import zlib
         var budget: Int64?
         let error = #expect(throws: ArchiveError.self) {
             try Deflate64.extract(
-                named: "big.bin", occurrence: 0, from: zip, to: out, budget: &budget, capacity: { nil }, report: {},
+                named: "big.bin", occurrence: 0, from: zip, encoding: .auto, to: out, budget: &budget,
+                capacity: { nil }, report: {},
                 admit: { _, _ in })
         }
         #expect(error.map(isUnreadable) == true)
@@ -183,7 +185,8 @@ import zlib
         var consumed: [UInt64] = []
         let reason = suspicion {
             try Deflate64.extract(
-                named: "big.bin", occurrence: 0, from: zip, to: out, budget: &budget, capacity: { nil }, report: {},
+                named: "big.bin", occurrence: 0, from: zip, encoding: .auto, to: out, budget: &budget,
+                capacity: { nil }, report: {},
                 admit: { bytes, read in
                     consumed.append(read)
                     guard admitted + bytes <= 1 << 20 else { throw ArchiveError.suspiciousArchive("stopped") }

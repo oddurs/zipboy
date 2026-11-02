@@ -36,57 +36,6 @@ public final class Node {
         return node
     }
 
-    /// Builds a `Node` tree directly from a `ZipCatalog` without touching the disk.
-    public static func fromCatalog(_ catalog: ZipCatalog, root: URL) -> Node {
-        let rootNode = Node(url: root, path: "", isDirectory: true, isSymlink: false, size: 0, modified: nil)
-        var folders: [String: Node] = ["": rootNode]
-
-        func ensureFolder(_ path: String) -> Node {
-            if let existing = folders[path] { return existing }
-            let parentPath = (path as NSString).deletingLastPathComponent
-            let parentNode = ensureFolder(parentPath)
-            let folderURL = root.appendingPathComponent(path, isDirectory: true)
-            let folderNode = Node(
-                url: folderURL, path: path, isDirectory: true, isSymlink: false, size: 0, modified: nil)
-            folderNode.parent = parentNode
-            parentNode.children.append(folderNode)
-            folders[path] = folderNode
-            return folderNode
-        }
-
-        for entry in catalog.entries {
-            if entry.isDirectory {
-                let folder = ensureFolder(entry.path)
-                if let mod = entry.modified { folder.modified = mod }
-                continue
-            }
-            let parentPath = (entry.path as NSString).deletingLastPathComponent
-            let parentNode = ensureFolder(parentPath)
-            if parentNode.children.contains(where: { $0.path == entry.path }) { continue }
-            let itemURL = root.appendingPathComponent(entry.path, isDirectory: false)
-            let child = Node(
-                url: itemURL,
-                path: entry.path,
-                isDirectory: false,
-                isSymlink: entry.isSymlink,
-                size: Int64(entry.uncompressedSize),
-                modified: entry.modified
-            )
-            child.parent = parentNode
-            parentNode.children.append(child)
-        }
-
-        func computeSizes(_ node: Node) {
-            guard node.isDirectory else { return }
-            for child in node.children where child.isDirectory {
-                computeSizes(child)
-            }
-            node.size = node.children.reduce(0) { $0 + $1.size }
-        }
-        computeSizes(rootNode)
-        return rootNode
-    }
-
     private func load() {
         let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         let urls =

@@ -172,15 +172,7 @@ public enum ZipWriter {
         try out.write(contentsOf: trailer)
         try out.close()
 
-        let fd = open(staging.path, O_RDONLY)
-        if fd >= 0 {
-            _ = fsync(fd)
-            close(fd)
-        }
-        guard rename(staging.path, destination.path) == 0 else {
-            let reason = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO).localizedDescription
-            throw ArchiveError.unwritable(reason)
-        }
+        try Archive.commit(staging, to: destination)
     }
 
     private static func writeVerbatim(
