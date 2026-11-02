@@ -88,6 +88,10 @@ final class ArchiveDocument: NSDocument {
     private var cancelLoading = Cancellation()
     /// Long work under way after loading, such as "Saving… 40%", for the window's subtitle.
     private(set) var activity: String?
+    /// Long work under way, newest last: the window shows the newest with a bar and a stop button.
+    private(set) var tasks: [LongTask] = []
+    /// Copies clone on APFS, which is instant and reports no progress; tests turn it off to have some.
+    var cloneWhenCopying = true
     private var saving: Saving?
 
     private struct SaveJob: Sendable {
@@ -557,6 +561,24 @@ final class ArchiveDocument: NSDocument {
         onStatus?()
     }
 
+    /// Starts long work the window can show and stop. Its title stands in the subtitle meanwhile.
+    func beginTask(_ title: String, total: Int64) -> LongTask {
+        let task = LongTask(title: title, total: total)
+        tasks.append(task)
+        report(title)
+        return task
+    }
+
+    func endTask(_ task: LongTask) {
+        tasks.removeAll { $0 === task }
+        report(tasks.last?.title)
+    }
+
+    /// Stops the work on show, from the stop button or Escape.
+    @objc func stopTask(_ sender: Any?) {
+        tasks.last?.progress.cancel()
+    }
+
     /// The file this archive came from, saved or not: for extracting beside it and previewing it.
     var source: URL? { fileURL ?? importedFrom?.url }
 
@@ -852,15 +874,34 @@ final class ArchiveDocument: NSDocument {
         }
         guard !plan.isEmpty else { return [] }
 
-        report(plan.count == 1 ? "Adding “\(plan[0].name)”…" : "Adding \(plan.count) items…")
-        defer { report(nil) }
+        let task = beginTask(
+            plan.count == 1 ? "Adding “\(plan[0].name)”…" : "Adding \(plan.count) items…",
+            total: FileCopy.size(of: plan.map(\.source)))
+        defer { endTask(task) }
         let jobs = plan
+        let progress = task.progress
+        let clone = cloneWhenCopying
         let staged = try await Task.detached {
-            try jobs.map { job in
-                let spot = try workspace.holdingSpot(for: job.name)
-                try FileManager.default.copyItem(at: job.source, to: spot)
-                Workspace.makeWritable(spot)
-                return Move(from: spot, to: workspace.url(folder).appendingPathComponent(job.name))
+            var spots: [URL] = []
+            var done: Int64 = 0
+            do {
+                return try jobs.map { job in
+                    let spot = try workspace.holdingSpot(for: job.name)
+                    spots.append(spot)
+                    var copied: Int64 = 0
+                    try FileCopy.copy(job.source, to: spot, clone: clone) { bytes in
+                        copied = bytes
+                        progress.completedUnitCount = done + bytes
+                        return !progress.isCancelled
+                    }
+                    done += copied
+                    Workspace.makeWritable(spot)
+                    return Move(from: spot, to: workspace.url(folder).appendingPathComponent(job.name))
+                }
+            } catch {
+                // Stopped or failed partway: nothing reaches the archive, and nothing is left staged.
+                for spot in spots { try? FileManager.default.removeItem(at: spot.deletingLastPathComponent()) }
+                throw error
             }
         }.value
         try perform(replaced + staged, named: plan.count == 1 ? "Add Item" : "Add Items")
@@ -1020,6 +1061,20 @@ final class Cancellation: @unchecked Sendable {
     var isCancelled: Bool { lock.withLock { cancelled } }
 
     func cancel() { lock.withLock { cancelled = true } }
+}
+
+/// Long work the window shows and can stop: adding and extracting. `progress` counts bytes, and a
+/// cancelled `progress` is how the work hears it should stop.
+final class LongTask: Sendable {
+    let title: String
+    let progress: Progress
+    let started: Date
+
+    init(title: String, total: Int64, started: Date = Date()) {
+        self.title = title
+        self.started = started
+        progress = Progress(totalUnitCount: max(total, 1))
+    }
 }
 
 /// A value shared between threads behind a lock.

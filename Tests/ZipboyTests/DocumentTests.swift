@@ -359,3 +359,84 @@ import ZipboyKit
         #expect(try Data(contentsOf: dest) == Data("inner".utf8))
     }
 }
+
+/// Long adds and extracts show how far they've got and stop cleanly.
+@MainActor
+@Suite(.serialized) struct LongTaskTests {
+    func bigFolder() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("long-\(UUID().uuidString)/Big")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for index in 0..<3 { try Data(count: 2 << 20).write(to: dir.appendingPathComponent("part \(index).bin")) }
+        return dir
+    }
+
+    @Test func stoppingAnAddLeavesTheArchiveAsItWas() async throws {
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        doc.cloneWhenCopying = false
+        // Stops the moment the add announces itself, before a byte is staged.
+        doc.onStatus = { doc.tasks.last?.progress.cancel() }
+        await #expect(throws: ArchiveError.cancelled) {
+            try await doc.add([try bigFolder()], into: "") { _ in .keepBoth }
+        }
+        #expect(doc.tree?.children.isEmpty == true)
+        #expect(doc.tasks.isEmpty)
+        #expect(doc.activity == nil)
+    }
+
+    @Test func anAddCountsItsBytes() async throws {
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        doc.cloneWhenCopying = false
+        var seen: LongTask?
+        doc.onStatus = { if let task = doc.tasks.last { seen = task } }
+        try await doc.add([try bigFolder()], into: "") { _ in .keepBoth }
+        let task = try #require(seen)
+        #expect(task.progress.totalUnitCount == 3 * (2 << 20))
+        #expect(task.progress.fractionCompleted == 1)
+        #expect(doc.tree?.find("Big/part 2.bin") != nil)
+    }
+
+    @Test func stoppingAnExtractRemovesWhatItCopied() throws {
+        let source = try bigFolder()
+        let out = source.deletingLastPathComponent().appendingPathComponent("out")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let progress = Progress(totalUnitCount: 3 * (2 << 20))
+        var calls = 0
+        // Stops partway through the second file, after the first is in place.
+        let files = (0..<3).map { source.appendingPathComponent("part \($0).bin") }
+        let watcher = progress.observe(\.completedUnitCount) { progress, _ in
+            calls += 1
+            if progress.completedUnitCount > (2 << 20) { progress.cancel() }
+        }
+        defer { watcher.invalidate() }
+        #expect(throws: ArchiveError.cancelled) {
+            _ = try BrowserViewController.copy(files, into: out, progress: progress, clone: false)
+        }
+        #expect(calls > 0)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: out.path).isEmpty)
+    }
+
+    @Test func theBarWaitsASecondThenShowsAndGoes() throws {
+        let doc = ArchiveDocument()
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        let controller = try #require(doc.windowControllers.first as? ArchiveWindowController)
+        let task = doc.beginTask("Extracting “x”…", total: 100)
+        controller.showTask(now: task.started.addingTimeInterval(0.5))
+        #expect(controller.taskBar.isHidden)
+        controller.showTask(now: task.started.addingTimeInterval(1.5))
+        #expect(!controller.taskBar.isHidden)
+        #expect(doc.activity == "Extracting “x”…")
+
+        // Escape reaches the document through the window controller.
+        controller.cancelOperation(nil)
+        #expect(task.progress.isCancelled)
+        doc.endTask(task)
+        controller.showTask()
+        #expect(controller.taskBar.isHidden)
+        #expect(doc.activity == nil)
+    }
+}

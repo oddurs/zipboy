@@ -10,6 +10,10 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToo
     private let preview = PreviewViewController()
     private let split = InspectorSplitViewController()
     private let searchItem = NSSearchToolbarItem(itemIdentifier: .search)
+    /// Long work's bar and stop button, under the toolbar while it runs.
+    let taskBar = NSTitlebarAccessoryViewController()
+    private let strip = TaskStrip()
+    private var taskTimer: Timer?
 
     init(document: ArchiveDocument) {
         let window = NSWindow(
@@ -50,6 +54,11 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToo
         searchItem.searchField.action = #selector(searchChanged(_:))
         searchItem.searchField.sendsSearchStringImmediately = true
 
+        taskBar.view = strip
+        taskBar.layoutAttribute = .bottom
+        taskBar.isHidden = true
+        window.addTitlebarAccessoryViewController(taskBar)
+
         window.setContentSize(NSSize(width: 980, height: 620))
         Self.cascade(window)
         window.initialFirstResponder = browser.outline
@@ -86,6 +95,11 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// The subtitle, and the inspector when it describes the archive. Cheap, for progress ticks.
     private func updateStatus() {
         guard let archive else { return }
+        if !archive.tasks.isEmpty, taskTimer == nil {
+            taskTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.showTask() }
+            }
+        }
         if browser.selection.isEmpty { preview.show([], archive: archive) }
         if let activity = archive.activity {
             window?.subtitle = activity
@@ -108,6 +122,25 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToo
     private func selectionChanged(_ nodes: [Node]) {
         guard let archive else { return }
         preview.show(nodes, archive: archive)
+    }
+
+    /// Brings up the bar once work has run a second, so quick work never flickers it, and puts it
+    /// away when the last task ends.
+    func showTask(now: Date = Date()) {
+        guard let task = archive?.tasks.last else {
+            taskBar.isHidden = true
+            taskTimer?.invalidate()
+            taskTimer = nil
+            return
+        }
+        guard now.timeIntervalSince(task.started) >= 1 else { return }
+        strip.show(task)
+        taskBar.isHidden = false
+    }
+
+    /// Escape stops long work, as it stops a copy in Finder.
+    override func cancelOperation(_ sender: Any?) {
+        archive?.stopTask(sender)
     }
 
     @objc func searchChanged(_ sender: NSSearchField) {
@@ -208,6 +241,52 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToo
         item.isBordered = true
         item.action = action
         return item
+    }
+}
+
+/// One line under the toolbar: what is happening, how far it has got, and a button to stop it.
+@MainActor
+final class TaskStrip: NSView {
+    let label = NSTextField(labelWithString: "")
+    let bar = NSProgressIndicator()
+    let stop = NSButton(
+        image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Stop")!, target: nil,
+        action: #selector(ArchiveDocument.stopTask(_:)))
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        label.font = Theme.Font.callout
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byTruncatingMiddle
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        bar.style = .bar
+        bar.controlSize = .small
+        bar.isIndeterminate = false
+        bar.minValue = 0
+        bar.maxValue = 1
+        stop.isBordered = false
+        stop.contentTintColor = .secondaryLabelColor
+        stop.toolTip = "Stop (Esc)"
+        let row = NSStackView(views: [label, bar, stop])
+        row.spacing = Theme.Space.s
+        row.edgeInsets = NSEdgeInsets(top: 0, left: Theme.Space.l, bottom: 0, right: Theme.Space.m)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 28),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.centerYAnchor.constraint(equalTo: centerYAnchor),
+            bar.widthAnchor.constraint(equalToConstant: 160),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("TaskStrip is built in code") }
+
+    func show(_ task: LongTask) {
+        label.stringValue = task.title
+        bar.doubleValue = task.progress.fractionCompleted
+        bar.setAccessibilityValue("\(Int(task.progress.fractionCompleted * 100)) percent")
     }
 }
 
