@@ -388,7 +388,10 @@ public enum Archive {
                         archive_read_data_skip(a)
                         continue
                     }
-                    let targetSize = Int64((try? fm.attributesOfItem(atPath: targetURL.path)[.size] as? Int) ?? 0)
+                    let targetSize =
+                        (try? fm.attributesOfItem(atPath: targetURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+                    try expansion.admit(declared: targetSize, path: path)
+                    try expansion.add(targetSize, consumed: archive_filter_bytes(a, -1))
                     try reserve(targetSize, needed: targetSize)
                     try? fm.removeItem(at: url)
                     try fm.copyItem(at: targetURL, to: url)
@@ -570,7 +573,7 @@ public enum Archive {
         /// produce within the ratio: no placement of its compressed bytes makes that honest.
         func admit(declared: Int64, path: String) throws {
             let (after, overflow) = expanded.addingReportingOverflow(declared)
-            guard overflow || (after > Self.floor && after / archiveBytes > Self.ratio) else { return }
+            guard overflow || (after > Self.floor && Self.exceedsRatio(after, base: archiveBytes)) else { return }
             throw ArchiveError.suspiciousArchive(
                 "The entry “\(path)” would expand to more than \(Self.ratio)× the archive’s size and was stopped to protect against a decompression bomb."
             )
@@ -579,13 +582,18 @@ public enum Archive {
         /// Counts `bytes` about to be written, `consumed` being the compressed bytes read so far. The
         /// running ratio catches a bomb whose declared sizes hide behind padding later in the file.
         mutating func add(_ bytes: Int64, consumed: Int64) throws {
-            let after = expanded + bytes
-            if after > Self.floor, after / max(consumed, 1) > Self.ratio {
+            let (after, overflow) = expanded.addingReportingOverflow(bytes)
+            if overflow || (after > Self.floor && Self.exceedsRatio(after, base: consumed)) {
                 throw ArchiveError.suspiciousArchive(
                     "This archive expanded past \(ByteCountFormatter.string(fromByteCount: Self.floor, countStyle: .file)) at more than \(Self.ratio)× its compressed size and was stopped to protect against a decompression bomb."
                 )
             }
             expanded = after
+        }
+
+        private static func exceedsRatio(_ expanded: Int64, base: Int64) -> Bool {
+            let (limit, overflow) = max(base, 1).multipliedReportingOverflow(by: Self.ratio)
+            return !overflow && expanded > limit
         }
     }
 
