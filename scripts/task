@@ -1,9 +1,36 @@
 #!/bin/sh
 set -eu
 
-# The one seam CI and git hooks call. Verbs: fmt fmt:check lint test build check package
+# The one seam CI and git hooks call. Verbs: fmt fmt:check lint test build version check package
 
 cd "$(dirname "$0")/.."
+
+# Prints "<short_version> <build_number>" for the git repository at $1 (default ".").
+# Exact tags stamp their version; commits past a prerelease tag (v0.1.0-rc.1) stamp its target
+# version with -dev (0.1.0-dev); commits past a release tag (v0.1.0) bump the patch and add -dev
+# (0.1.1-dev); repositories with no tag yet stamp 0.1.0-dev.
+version_for_repo() (
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+    repo="${1:-.}"
+    if exact_tag="$(git -C "$repo" describe --tags --exact-match 2>/dev/null)"; then
+        short_ver="${exact_tag#v}"
+    else
+        latest_tag="$(git -C "$repo" describe --tags --abbrev=0 2>/dev/null || true)"
+        base="${latest_tag#v}"
+        if [ -z "$base" ]; then
+            short_ver="0.1.0-dev"
+        elif [ "${base#*-}" != "$base" ]; then
+            short_ver="${base%%-*}-dev"
+        else
+            IFS=. read -r major minor patch <<EOF
+$base
+EOF
+            short_ver="${major:-0}.${minor:-1}.$(( ${patch:-0} + 1 ))-dev"
+        fi
+    fi
+    build_num="$(git -C "$repo" rev-list --count HEAD 2>/dev/null || echo "1")"
+    printf '%s %s\n' "$short_ver" "$build_num"
+)
 
 # Command Line Tools ship Swift Testing outside the default search paths;
 # Xcode does not need this.
@@ -73,13 +100,9 @@ build)
             -output "$appex/Contents/MacOS/$ext"
         cp "Resources/${ext#Zipboy}/Info.plist" "$appex/Contents/"
     done
-    if exact_tag="$(git describe --tags --exact-match 2>/dev/null)"; then
-        short_ver="${exact_tag#v}"
-    else
-        latest_tag="$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")"
-        short_ver="${latest_tag#v}-dev"
-    fi
-    build_num="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
+    read -r short_ver build_num <<EOF
+$(version_for_repo .)
+EOF
     for plist in "$app/Contents/Info.plist" "$app"/Contents/PlugIns/*.appex/Contents/Info.plist; do
         /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $short_ver" "$plist"
         /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_num" "$plist"
@@ -129,13 +152,16 @@ package)
     (cd build && shasum -a 256 "Zipboy-$version.dmg" >"Zipboy-$version.dmg.sha256")
     echo "==> packaged $dmg"
     ;;
+version)
+    version_for_repo "${2:-.}"
+    ;;
 check)
     "$0" lint
     "$0" test
     "$0" build
     ;;
 *)
-    echo "usage: scripts/task {fmt|fmt:check|lint|test [filter]|build|check|package <version>}" >&2
+    echo "usage: scripts/task {fmt|fmt:check|lint|test [filter]|build|version [repo]|check|package <version>}" >&2
     exit 2
     ;;
 esac

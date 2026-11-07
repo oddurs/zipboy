@@ -41,10 +41,10 @@ public enum Updates {
     }
 
     /// Whether `remote` is a later version than `local`, by semantic-version precedence. A local build
-    /// between tags is stamped "<last tag>-dev", and is already past that tag.
+    /// between tags is stamped "<next version>-dev", so the previous release ranks below it and the next
+    /// release ranks above it.
     public static func isNewer(_ remote: String, than local: String) -> Bool {
-        let base = local.hasSuffix("-dev") ? String(local.dropLast(4)) : local
-        return compare(remote, base) == .orderedDescending
+        compare(remote, local) == .orderedDescending
     }
 
     static func compare(_ a: String, _ b: String) -> ComparisonResult {
