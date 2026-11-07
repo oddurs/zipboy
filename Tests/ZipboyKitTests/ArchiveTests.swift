@@ -973,6 +973,278 @@ import zlib
         #expect(hugeRange.offset == hugePayloadStart)
         #expect(hugeRange.length == hugeSize)
     }
+
+    @Test func zipWriterFollowsZipMethodAndPassesUnzipArchiveUtilityCatalogAndLibarchive() throws {
+        let fm = FileManager.default
+        let sourceTree = try folder("method-source")
+        let keptText = Data(String(repeating: "unchanged-compressible-line\n", count: 200).utf8)
+        let keptJpg = Data((0..<1024).map { UInt8(($0 * 97) & 0xff) })
+        try keptText.write(to: sourceTree.appendingPathComponent("kept.txt"))
+        try keptJpg.write(to: sourceTree.appendingPathComponent("kept.jpg"))
+        try write("rename-me", to: "old/readme.md", in: sourceTree)
+
+        let sourceZip = dir.appendingPathComponent("method-source.zip")
+        try Archive.writeZip(from: sourceTree, to: sourceZip, compressionLevel: .best)
+        let sourceCatalog = try ZipCatalog.read(from: sourceZip)
+
+        let ws = try folder("method-ws")
+        let compressibleTxt = Data(String(repeating: "deflate-me-please\n", count: 300).utf8)
+        let compressibleJson = Data(String(repeating: "{\"k\":\"v\"}\n", count: 300).utf8)
+        let storedJpg = Data((0..<2048).map { UInt8(($0 * 53) & 0xff) })
+        let storedMp4 = Data((0..<2048).map { UInt8(($0 * 71) & 0xff) })
+        let storedZip = Data((0..<512).map { UInt8(($0 * 31) & 0xff) })
+        let stagedPng = Data((0..<1536).map { UInt8(($0 * 43) & 0xff) })
+
+        try compressibleTxt.write(to: ws.appendingPathComponent("notes.txt"))
+        try compressibleJson.write(to: ws.appendingPathComponent("config.json"))
+        try Data().write(to: ws.appendingPathComponent("empty.txt"))
+        try storedJpg.write(to: ws.appendingPathComponent("PHOTO.JPG"))
+        try storedMp4.write(to: ws.appendingPathComponent("clip.mp4"))
+        try storedZip.write(to: ws.appendingPathComponent("nested.zip"))
+        // Temp file extension is .tmp (compressible), but archive path is .png (stored): path wins.
+        try stagedPng.write(to: ws.appendingPathComponent("staged.tmp"))
+        try fm.createDirectory(at: ws.appendingPathComponent("empty-dir"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(
+            atPath: ws.appendingPathComponent("notes-link").path, withDestinationPath: "notes.txt")
+
+        let keptEntry = try #require(sourceCatalog.entries.first { $0.path == "kept.txt" })
+        let keptJpgEntry = try #require(sourceCatalog.entries.first { $0.path == "kept.jpg" })
+        let renameEntry = try #require(sourceCatalog.entries.first { $0.path == "old/readme.md" })
+
+        let outZip = dir.appendingPathComponent("method-out.zip")
+        try ZipWriter.write(
+            items: [
+                .verbatim(keptEntry),
+                .verbatim(keptJpgEntry),
+                .verbatim(renameEntry, newPath: "docs/readme.md"),
+                .workspace(url: ws.appendingPathComponent("notes.txt"), path: "notes.txt"),
+                .workspace(url: ws.appendingPathComponent("config.json"), path: "config.json"),
+                .workspace(url: ws.appendingPathComponent("empty.txt"), path: "empty.txt"),
+                .workspace(url: ws.appendingPathComponent("PHOTO.JPG"), path: "PHOTO.JPG"),
+                .workspace(url: ws.appendingPathComponent("clip.mp4"), path: "clip.mp4"),
+                .workspace(url: ws.appendingPathComponent("nested.zip"), path: "nested.zip"),
+                .workspace(url: ws.appendingPathComponent("staged.tmp"), path: "assets/banner.png"),
+                .workspace(url: ws.appendingPathComponent("empty-dir"), path: "empty-dir"),
+                .workspace(url: ws.appendingPathComponent("notes-link"), path: "notes-link"),
+            ],
+            sourceZip: sourceZip,
+            to: outZip,
+            compressionLevel: .balanced
+        )
+
+        // 1. Re-read through ZipCatalog and verify ZipMethod rules (8 = deflate, 0 = store).
+        let catalog = try ZipCatalog.read(from: outZip)
+        let byPath = Dictionary(uniqueKeysWithValues: catalog.entries.map { ($0.path, $0) })
+        #expect(byPath["notes.txt"]?.method == 8)
+        #expect((byPath["notes.txt"]?.compressedSize ?? .max) < UInt64(compressibleTxt.count))
+        #expect(byPath["config.json"]?.method == 8)
+        #expect(byPath["empty.txt"]?.method == 0)
+        #expect(byPath["PHOTO.JPG"]?.method == 0)
+        #expect(byPath["clip.mp4"]?.method == 0)
+        #expect(byPath["nested.zip"]?.method == 0)
+        #expect(byPath["assets/banner.png"]?.method == 0)
+        #expect(byPath["empty-dir"]?.method == 0)
+        #expect(byPath["empty-dir"]?.isDirectory == true)
+        #expect(byPath["notes-link"]?.method == 0)
+        #expect(byPath["notes-link"]?.isSymlink == true)
+
+        // 2. Verify with Info-ZIP `unzip -t`.
+        let (unzipStatus, unzipOut) = try run("/usr/bin/unzip", ["-t", outZip.path])
+        #expect(unzipStatus == 0, "\(unzipOut)")
+
+        // 3. Verify with `/usr/bin/ditto -x -k` (Archive Utility's Bom.framework engine).
+        let dittoDir = try folder("ditto-out")
+        let (dittoStatus, dittoOut) = try run("/usr/bin/ditto", ["-x", "-k", outZip.path, dittoDir.path])
+        #expect(dittoStatus == 0, "\(dittoOut)")
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("kept.txt")) == keptText)
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("kept.jpg")) == keptJpg)
+        #expect(try read("docs/readme.md", in: dittoDir) == "rename-me")
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("notes.txt")) == compressibleTxt)
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("config.json")) == compressibleJson)
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("empty.txt")) == Data())
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("PHOTO.JPG")) == storedJpg)
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("clip.mp4")) == storedMp4)
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("nested.zip")) == storedZip)
+        #expect(try Data(contentsOf: dittoDir.appendingPathComponent("assets/banner.png")) == stagedPng)
+        #expect(
+            try fm.destinationOfSymbolicLink(atPath: dittoDir.appendingPathComponent("notes-link").path) == "notes.txt")
+
+        // 4. Verify and extract through libarchive (`Archive.verify` + `Archive.extract`).
+        _ = try Archive.verify(outZip)
+        let libarchiveDir = try folder("libarchive-out")
+        _ = try Archive.extract(outZip, into: libarchiveDir)
+        #expect(try Data(contentsOf: libarchiveDir.appendingPathComponent("kept.txt")) == keptText)
+        #expect(try Data(contentsOf: libarchiveDir.appendingPathComponent("assets/banner.png")) == stagedPng)
+        #expect(
+            try fm.destinationOfSymbolicLink(atPath: libarchiveDir.appendingPathComponent("notes-link").path)
+                == "notes.txt")
+    }
+
+    @Test func zipWriterRoundTripsZip64OverFourGigabytesAndOverSixtyFiveThousandEntries() throws {
+        let fm = FileManager.default
+
+        // 1. Over 65,535 entries round-tripped through ZipWriter.
+        func appendLE<each T: FixedWidthInteger>(_ data: inout Data, _ values: repeat each T) {
+            repeat data.append(contentsOf: Swift.withUnsafeBytes(of: (each values).littleEndian, Array.init))
+        }
+        let seedMany = dir.appendingPathComponent("seed-70k.zip")
+        do {
+            let count = 70_000
+            let dosDate: UInt16 = (46 << 9) | (11 << 5) | 7
+            let dosTime: UInt16 = (12 << 11)
+            let payload = Data("x".utf8)
+            let crc = UInt32(0x8C73_6521)  // CRC-32("x") — computed via zlib below to be exact
+            let exactCRC = UInt32(
+                payload.withUnsafeBytes { zlib.crc32(0, $0.bindMemory(to: Bytef.self).baseAddress, uInt($0.count)) })
+            _ = crc
+            var local = Data(capacity: count * 52)
+            var central = Data(capacity: count * 68)
+            for idx in 0..<count {
+                let name = Data("f\(idx % 64)/e-\(idx).txt".utf8)
+                let offset = UInt32(local.count)
+                appendLE(&local, UInt32(0x0403_4b50), UInt16(20), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+                appendLE(&local, exactCRC, UInt32(1), UInt32(1), UInt16(name.count), UInt16(0))
+                local.append(name)
+                local.append(payload)
+
+                appendLE(
+                    &central, UInt32(0x0201_4b50), UInt16(0x031E), UInt16(20), UInt16(1 << 11), UInt16(0), dosTime,
+                    dosDate)
+                appendLE(&central, exactCRC, UInt32(1), UInt32(1), UInt16(name.count), UInt16(0), UInt16(0))
+                appendLE(&central, UInt16(0), UInt16(0), UInt32(0o100644) << 16, offset)
+                central.append(name)
+            }
+            let cdOffset = UInt64(local.count)
+            let cdSize = UInt64(central.count)
+            let z64Offset = cdOffset + cdSize
+            var tail = Data()
+            appendLE(&tail, UInt32(0x0606_4b50), UInt64(44), UInt16(0x032D), UInt16(45), UInt32(0), UInt32(0))
+            appendLE(&tail, UInt64(count), UInt64(count), cdSize, cdOffset)
+            appendLE(&tail, UInt32(0x0706_4b50), UInt32(0), z64Offset, UInt32(1))
+            appendLE(
+                &tail, UInt32(0x0605_4b50), UInt16(0), UInt16(0), UInt16(0xFFFF), UInt16(0xFFFF), UInt32(cdSize),
+                UInt32(cdOffset), UInt16(0))
+            fm.createFile(atPath: seedMany.path, contents: nil)
+            let out = try FileHandle(forWritingTo: seedMany)
+            try out.write(contentsOf: local)
+            try out.write(contentsOf: central)
+            try out.write(contentsOf: tail)
+            try out.close()
+        }
+
+        let seedCatalog = try ZipCatalog.read(from: seedMany)
+        #expect(seedCatalog.entries.count == 70_000)
+
+        let addedFile = dir.appendingPathComponent("extra-70k.txt")
+        try Data("added-70001".utf8).write(to: addedFile)
+        var manyItems: [ZipWriter.Item] = []
+        manyItems.reserveCapacity(70_001)
+        for entry in seedCatalog.entries {
+            if entry.index == 0 {
+                manyItems.append(.verbatim(entry, newPath: "f0/renamed-0.txt"))
+            } else {
+                manyItems.append(.verbatim(entry))
+            }
+        }
+        manyItems.append(.workspace(url: addedFile, path: "f0/added-70001.txt"))
+
+        let roundTrippedMany = dir.appendingPathComponent("roundtrip-70k.zip")
+        try ZipWriter.write(items: manyItems, sourceZip: seedMany, to: roundTrippedMany)
+        try? fm.removeItem(at: seedMany)
+
+        let parsedMany = try ZipCatalog.read(from: roundTrippedMany)
+        #expect(parsedMany.entries.count == 70_001)
+        #expect(parsedMany.entries.first?.path == "f0/renamed-0.txt")
+        #expect(parsedMany.entries.last?.path == "f0/added-70001.txt")
+        let (manyUnzip, manyUnzipOut) = try run("/usr/bin/unzip", ["-t", roundTrippedMany.path])
+        #expect(manyUnzip == 0, "\(manyUnzipOut)")
+        let manyReport = try Archive.verify(roundTrippedMany)
+        #expect(manyReport.entryCount == 70_001)
+        try? fm.removeItem(at: roundTrippedMany)
+
+        // 2. Over 4 GiB archive round-tripped through ZipWriter (stored >4 GiB entry + entry past 4 GiB offset).
+        let bigSize: UInt64 = 4_310_000_000  // > 4 GiB (0x1_00E4_F9C0)
+        let headMarker = Data("HEAD-ZIP64-MARKER".utf8)
+        let tailMarker = Data("TAIL-ZIP64-MARKER".utf8)
+        let sparseBig = dir.appendingPathComponent("movie.mp4")
+        fm.createFile(atPath: sparseBig.path, contents: nil)
+        do {
+            let h = try FileHandle(forWritingTo: sparseBig)
+            try h.write(contentsOf: headMarker)
+            try h.seek(toOffset: bigSize - UInt64(tailMarker.count))
+            try h.write(contentsOf: tailMarker)
+            try h.close()
+        }
+        let afterFourGBSrc = dir.appendingPathComponent("after.txt")
+        try Data("stored-past-four-gib".utf8).write(to: afterFourGBSrc)
+
+        let firstBigZip = dir.appendingPathComponent("big-first.zip")
+        try ZipWriter.write(
+            items: [
+                .workspace(url: sparseBig, path: "movie.mp4"),
+                .workspace(url: afterFourGBSrc, path: "after.txt"),
+            ],
+            sourceZip: nil,
+            to: firstBigZip,
+            compressionLevel: .fast
+        )
+        try? fm.removeItem(at: sparseBig)
+
+        let firstBigCatalog = try ZipCatalog.read(from: firstBigZip)
+        #expect(firstBigCatalog.centralDirectoryOffset > 0xFFFF_FFFF)
+        let movieEntry = try #require(firstBigCatalog.entries.first { $0.path == "movie.mp4" })
+        let afterEntry = try #require(firstBigCatalog.entries.first { $0.path == "after.txt" })
+        #expect(movieEntry.compressedSize == bigSize)
+        #expect(movieEntry.uncompressedSize == bigSize)
+        #expect(afterEntry.localHeaderOffset > 0xFFFF_FFFF)
+        let firstReader = try FileHandle(forReadingFrom: firstBigZip)
+        let firstAfterRange = try ZipCatalog.payloadRange(in: firstReader, for: afterEntry)
+        try firstReader.seek(toOffset: firstAfterRange.offset)
+        let origAfterCompressed = try #require(try firstReader.read(upToCount: Int(firstAfterRange.length)))
+        try firstReader.close()
+
+        let editedPastFourGB = dir.appendingPathComponent("edited-past.txt")
+        try Data("fresh-past-four-gib".utf8).write(to: editedPastFourGB)
+        let secondBigZip = dir.appendingPathComponent("big-roundtrip.zip")
+        try ZipWriter.write(
+            items: [
+                .verbatim(movieEntry),
+                .verbatim(afterEntry, newPath: "moved-after.txt"),
+                .workspace(url: editedPastFourGB, path: "fresh.txt"),
+            ],
+            sourceZip: firstBigZip,
+            to: secondBigZip,
+            compressionLevel: .fast
+        )
+        try? fm.removeItem(at: firstBigZip)
+
+        let secondBigCatalog = try ZipCatalog.read(from: secondBigZip)
+        #expect(secondBigCatalog.centralDirectoryOffset > 0xFFFF_FFFF)
+        let rtMovie = try #require(secondBigCatalog.entries.first { $0.path == "movie.mp4" })
+        let rtMoved = try #require(secondBigCatalog.entries.first { $0.path == "moved-after.txt" })
+        let rtFresh = try #require(secondBigCatalog.entries.first { $0.path == "fresh.txt" })
+        #expect(rtMovie.crc32 == movieEntry.crc32)
+        #expect(rtMovie.compressedSize == bigSize)
+        #expect(rtMoved.localHeaderOffset > 0xFFFF_FFFF)
+        #expect(rtFresh.localHeaderOffset > 0xFFFF_FFFF)
+
+        let (bigUnzipStatus, bigUnzipOut) = try run("/usr/bin/unzip", ["-t", secondBigZip.path])
+        #expect(bigUnzipStatus == 0, "\(bigUnzipOut)")
+        let listedPaths = try Archive.list(secondBigZip).entries.map(\.path)
+        #expect(listedPaths == ["movie.mp4", "moved-after.txt", "fresh.txt"])
+
+        let reader = try FileHandle(forReadingFrom: secondBigZip)
+        let movieRange = try ZipCatalog.payloadRange(in: reader, for: rtMovie)
+        try reader.seek(toOffset: movieRange.offset)
+        #expect(try reader.read(upToCount: headMarker.count) == headMarker)
+        try reader.seek(toOffset: movieRange.offset + bigSize - UInt64(tailMarker.count))
+        #expect(try reader.read(upToCount: tailMarker.count) == tailMarker)
+        let movedRange = try ZipCatalog.payloadRange(in: reader, for: rtMoved)
+        try reader.seek(toOffset: movedRange.offset)
+        #expect(try reader.read(upToCount: Int(movedRange.length)) == origAfterCompressed)
+        try reader.close()
+        try? fm.removeItem(at: secondBigZip)
+    }
 }
 
 @Suite struct NodeTests {
