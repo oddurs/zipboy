@@ -474,6 +474,55 @@ import ZipboyKit
             try Data(contentsOf: checkDir2.appendingPathComponent("inplace.txt")) == Data("diff-len-123".utf8))
     }
 
+    @Test func fallsBackToFullWriteWithLogWhenSourceArchiveChangedOnDisk() async throws {
+        let fm = FileManager.default
+        let payloadKeep = Data(String(repeating: "keep-workspace-copy\n", count: 200).utf8)
+        let document = try await document([
+            "keep.txt": payloadKeep,
+            "note.txt": Data("initial".utf8),
+        ])
+        defer { document.close() }
+
+        let zip = try #require(document.fileURL)
+        let logs = Locked<[String]>([])
+        document.onSaveLog = { line in
+            var current = logs.value
+            current.append(line)
+            logs.value = current
+        }
+
+        // Replace the source archive on disk behind the document's back with an unrelated archive.
+        // If delta save tried to copy verbatim from `zip`, it would read garbage or fail; falling
+        // back to a full write from the unpacked workspace snapshot produces a valid archive.
+        let rogueDir = dir.appendingPathComponent("rogue-src")
+        try fm.createDirectory(at: rogueDir, withIntermediateDirectories: true)
+        try Data("rogue".utf8).write(to: rogueDir.appendingPathComponent("rogue.txt"))
+        try Archive.writeZip(from: rogueDir, to: zip)
+
+        let addedURL = dir.appendingPathComponent("added.txt")
+        try Data("added-in-workspace".utf8).write(to: addedURL)
+        try await document.add([addedURL], into: "") { _ in Prompts.Resolution.replace }
+
+        #expect(try await save(document, to: zip, as: .saveOperation) == nil)
+        #expect(logs.value.count == 1)
+        #expect(logs.value.first?.contains(zip.lastPathComponent) == true)
+        #expect(logs.value.first?.contains("falling back to full write") == true)
+
+        let extracted = dir.appendingPathComponent("fallback-extracted")
+        try fm.createDirectory(at: extracted, withIntermediateDirectories: true)
+        _ = try Archive.extract(zip, into: extracted)
+        #expect(try Archive.contents(of: extracted) == ["added.txt", "keep.txt", "note.txt"])
+        #expect(try Data(contentsOf: extracted.appendingPathComponent("keep.txt")) == payloadKeep)
+        #expect(try Data(contentsOf: extracted.appendingPathComponent("added.txt")) == Data("added-in-workspace".utf8))
+
+        // After the fallback save completes in place, provenance is refreshed to the newly written archive,
+        // so the next save uses ZipWriter again without logging a fallback.
+        _ = try document.newFolder(in: "")
+        #expect(try await save(document, to: zip, as: .saveOperation) == nil)
+        #expect(logs.value.count == 1)
+        #expect(try names(in: zip) == ["added.txt", "keep.txt", "note.txt", "untitled folder"])
+    }
+
     @Test func nestedArchiveTracksParentAndFinderServicesRoundTrip() async throws {
         let parentDoc = try await document(["outer.txt": Data("outer".utf8)])
         defer { parentDoc.close() }
