@@ -1,11 +1,13 @@
 import AppKit
 import ZipboyKit
+import os
 
 /// An archive unpacked into a workspace. Edits change the workspace and register their undo; saving
 /// zips the workspace back up. Every readable format saves as ZIP, the one format worth writing.
 @objc(ArchiveDocument)
 final class ArchiveDocument: NSDocument {
     nonisolated static let zipType = "public.zip-archive"
+    nonisolated private static let logger = Logger(subsystem: "com.oddurs.zipboy", category: "Save")
 
     struct TrackedFile: Equatable, Sendable {
         let entry: ZipCatalog.Entry
@@ -100,15 +102,24 @@ final class ArchiveDocument: NSDocument {
     private(set) var tasks: [LongTask] = []
     /// Says a change out loud for VoiceOver. Each document has its own, so a test hears only its own.
     var announce: (String) -> Void = { Announcer.say($0) }
+    /// Receives save fallback log lines so tests can observe when a delta save falls back to a full write.
+    var onSaveLog: (@Sendable (String) -> Void)?
     /// Copies clone on APFS, which is instant and reports no progress; tests turn it off to have some.
     var cloneWhenCopying = true
     private var saving: Saving?
+
+    private struct DeltaPlan: Sendable {
+        let items: [ZipWriter.Item]
+        let sourceSignature: SourceSignature
+        let comment: Data
+    }
 
     private struct SaveJob: Sendable {
         let contents: URL
         let password: String?
         let compressionLevel: Settings.CompressionLevel
-        let deltaPlan: (items: [ZipWriter.Item], sourceZip: URL, comment: Data)?
+        let deltaPlan: DeltaPlan?
+        let onSaveLog: (@Sendable (String) -> Void)?
         let cancellation: Cancellation
     }
 
@@ -402,6 +413,7 @@ final class ArchiveDocument: NSDocument {
             password: password,
             compressionLevel: Settings.shared.compressionLevel,
             deltaPlan: delta,
+            onSaveLog: onSaveLog,
             cancellation: cancellation
         )
         let autosave = saveOperation == .autosaveInPlaceOperation || saveOperation == .autosaveElsewhereOperation
@@ -447,14 +459,23 @@ final class ArchiveDocument: NSDocument {
         }
         do {
             if job.password == nil, let delta = job.deltaPlan {
-                try ZipWriter.write(
-                    items: delta.items,
-                    sourceZip: delta.sourceZip,
-                    to: url,
-                    compressionLevel: job.compressionLevel,
-                    comment: delta.comment,
-                    progress: progressCallback
-                )
+                if SourceSignature.of(delta.sourceSignature.url) == delta.sourceSignature {
+                    try ZipWriter.write(
+                        items: delta.items,
+                        sourceZip: delta.sourceSignature.url,
+                        to: url,
+                        compressionLevel: job.compressionLevel,
+                        comment: delta.comment,
+                        progress: progressCallback
+                    )
+                } else {
+                    Self.logSourceChangedFallback(for: delta.sourceSignature.url, notify: job.onSaveLog)
+                    try Archive.writeZip(
+                        from: job.contents, to: url, password: job.password,
+                        compressionLevel: job.compressionLevel,
+                        progress: progressCallback
+                    )
+                }
             } else {
                 try Archive.writeZip(
                     from: job.contents, to: url, password: job.password,
@@ -466,6 +487,16 @@ final class ArchiveDocument: NSDocument {
             // The one error AppKit never shows; the next autosave starts from the newer contents.
             throw CocoaError(.userCancelled)
         }
+    }
+
+    nonisolated private static func logSourceChangedFallback(
+        for url: URL, notify: (@Sendable (String) -> Void)?
+    ) {
+        let message =
+            "Source archive changed on disk since opening (\(url.lastPathComponent)); falling back to full write."
+        logger.notice("\(message, privacy: .public)")
+        fputs("Zipboy: \(message)\n", stderr)
+        notify?(message)
     }
 
     /// Checks whether a workspace file at `path` is still untouched since unpacking from the source ZIP.
@@ -480,14 +511,17 @@ final class ArchiveDocument: NSDocument {
 
     private func buildDeltaPlan(
         workspaceRoot: URL, snapshotRoot: URL
-    ) -> (items: [ZipWriter.Item], sourceZip: URL, comment: Data)? {
+    ) -> DeltaPlan? {
         guard password == nil,
             let catalog,
-            let expectedSig = sourceSignature,
-            let currentSig = SourceSignature.of(expectedSig.url),
-            currentSig == expectedSig,
-            let paths = try? Archive.contents(of: workspaceRoot)
+            let expectedSig = sourceSignature
         else { return nil }
+
+        guard SourceSignature.of(expectedSig.url) == expectedSig else {
+            Self.logSourceChangedFallback(for: expectedSig.url, notify: onSaveLog)
+            return nil
+        }
+        guard let paths = try? Archive.contents(of: workspaceRoot) else { return nil }
 
         var items: [ZipWriter.Item] = []
         items.reserveCapacity(paths.count)
@@ -501,7 +535,7 @@ final class ArchiveDocument: NSDocument {
                 items.append(.workspace(url: snapURL, path: path))
             }
         }
-        return (items: items, sourceZip: expectedSig.url, comment: catalog.comment)
+        return DeltaPlan(items: items, sourceSignature: expectedSig, comment: catalog.comment)
     }
 
     private func refreshTrackingAfterSave(
