@@ -4,7 +4,17 @@ import UniformTypeIdentifiers
 /// One file or folder in an unpacked archive. Nodes are classes because the outline view tells items
 /// apart by identity.
 public final class Node {
-    public let url: URL
+    private var cachedURL: URL?
+    private let workspaceRoot: URL?
+    public var url: URL {
+        if let cachedURL { return cachedURL }
+        let resolved =
+            parent?.url.appendingPathComponent(name, isDirectory: isDirectory)
+            ?? workspaceRoot?.appendingPathComponent(path, isDirectory: isDirectory)
+            ?? URL(fileURLWithPath: path, isDirectory: isDirectory)
+        cachedURL = resolved
+        return resolved
+    }
     public let name: String
     /// Slash-separated, from the archive's root.
     public let path: String
@@ -17,7 +27,8 @@ public final class Node {
     public private(set) weak var parent: Node?
 
     init(
-        url: URL,
+        url: URL? = nil,
+        workspaceRoot: URL? = nil,
         name: String? = nil,
         path: String,
         isDirectory: Bool,
@@ -25,8 +36,9 @@ public final class Node {
         size: Int64,
         modified: Date?
     ) {
-        self.url = url
-        self.name = name ?? url.lastPathComponent
+        self.cachedURL = url
+        self.workspaceRoot = workspaceRoot
+        self.name = name ?? url?.lastPathComponent ?? ""
         self.path = path
         self.isDirectory = isDirectory
         self.isSymlink = isSymlink
@@ -66,6 +78,7 @@ public final class Node {
     public static func fromCatalog(_ catalog: ZipCatalog, workspaceRoot: URL) -> Node {
         let root = Node(
             url: workspaceRoot,
+            workspaceRoot: workspaceRoot,
             name: workspaceRoot.lastPathComponent,
             path: "",
             isDirectory: true,
@@ -75,7 +88,7 @@ public final class Node {
         )
         root.mergeCatalog(
             workspaceRoot: workspaceRoot,
-            entries: catalog.entries.map { (path: $0.path, entry: $0) },
+            entries: catalog.entries.lazy.map { (path: $0.path, entry: $0) },
             extraFolders: [:],
             checkExistingChildren: false
         )
@@ -115,9 +128,8 @@ public final class Node {
                 folderName = folderPath
             }
             let parentNode = ensureFolder(parentPath)
-            let folderURL = parentNode.url.appendingPathComponent(folderName, isDirectory: true)
             let folder = Node(
-                url: folderURL,
+                workspaceRoot: workspaceRoot,
                 name: folderName,
                 path: folderPath,
                 isDirectory: true,
@@ -128,7 +140,9 @@ public final class Node {
             folder.parent = parentNode
             parentNode.children.append(folder)
             folders[folderPath] = folder
-            existingByPath.insert(folderPath)
+            if checkExistingChildren {
+                existingByPath.insert(folderPath)
+            }
             return folder
         }
 
@@ -142,7 +156,7 @@ public final class Node {
                 }
                 continue
             }
-            if existingByPath.contains(path) { continue }
+            if checkExistingChildren, existingByPath.contains(path) { continue }
             let parentPath: String
             let leafName: String
             if let slash = path.lastIndex(of: "/") {
@@ -153,9 +167,8 @@ public final class Node {
                 leafName = path
             }
             let parentNode = ensureFolder(parentPath)
-            let childURL = parentNode.url.appendingPathComponent(leafName, isDirectory: false)
             let child = Node(
-                url: childURL,
+                workspaceRoot: workspaceRoot,
                 name: leafName,
                 path: path,
                 isDirectory: false,
@@ -165,7 +178,9 @@ public final class Node {
             )
             child.parent = parentNode
             parentNode.children.append(child)
-            existingByPath.insert(path)
+            if checkExistingChildren {
+                existingByPath.insert(path)
+            }
         }
 
         for (folderPath, mod) in extraFolders where !folderPath.isEmpty {
@@ -230,8 +245,8 @@ public final class Node {
         let kept = children.compactMap { $0.filtered(query, showHiddenFiles: showHiddenFiles) }
         if query.isEmpty {
             let copy = Node(
-                url: url, name: name, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size,
-                modified: modified)
+                url: cachedURL, workspaceRoot: workspaceRoot, name: name, path: path, isDirectory: isDirectory,
+                isSymlink: isSymlink, size: size, modified: modified)
             copy.children = kept
             copy.children.forEach { $0.parent = copy }
             return copy
@@ -239,8 +254,8 @@ public final class Node {
         let matches = !path.isEmpty && name.localizedStandardContains(query)
         guard matches || !kept.isEmpty || path.isEmpty else { return nil }
         let copy = Node(
-            url: url, name: name, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size,
-            modified: modified)
+            url: cachedURL, workspaceRoot: workspaceRoot, name: name, path: path, isDirectory: isDirectory,
+            isSymlink: isSymlink, size: size, modified: modified)
         // A matching folder keeps all of its contents, so a search can narrow to a folder and browse it.
         copy.children = matches ? children.compactMap { $0.copied(showHiddenFiles: showHiddenFiles) } : kept
         copy.children.forEach { $0.parent = copy }
@@ -250,8 +265,8 @@ public final class Node {
     private func copied(showHiddenFiles: Bool = true) -> Node? {
         if !path.isEmpty, !showHiddenFiles, name.hasPrefix(".") { return nil }
         let copy = Node(
-            url: url, name: name, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size,
-            modified: modified)
+            url: cachedURL, workspaceRoot: workspaceRoot, name: name, path: path, isDirectory: isDirectory,
+            isSymlink: isSymlink, size: size, modified: modified)
         copy.children = children.compactMap { $0.copied(showHiddenFiles: showHiddenFiles) }
         copy.children.forEach { $0.parent = copy }
         return copy
@@ -259,24 +274,28 @@ public final class Node {
 
     /// Orders children by the given key, optionally keeping folders above files.
     public func sort(by key: SortKey, ascending: Bool, foldersFirst: Bool = false) {
-        children.sort { a, b in
-            if foldersFirst, a.isDirectory != b.isDirectory {
-                return a.isDirectory
+        if children.count > 1 {
+            children.sort { a, b in
+                if foldersFirst, a.isDirectory != b.isDirectory {
+                    return a.isDirectory
+                }
+                let order: ComparisonResult
+                switch key {
+                case .name: order = a.name.localizedStandardCompare(b.name)
+                case .size:
+                    order = a.size == b.size ? .orderedSame : (a.size < b.size ? .orderedAscending : .orderedDescending)
+                case .modified:
+                    let x = a.modified ?? .distantPast, y = b.modified ?? .distantPast
+                    order = x == y ? .orderedSame : (x < y ? .orderedAscending : .orderedDescending)
+                case .kind: order = a.kind.localizedStandardCompare(b.kind)
+                }
+                if order == .orderedSame { return a.name.localizedStandardCompare(b.name) == .orderedAscending }
+                return ascending ? order == .orderedAscending : order == .orderedDescending
             }
-            let order: ComparisonResult
-            switch key {
-            case .name: order = a.name.localizedStandardCompare(b.name)
-            case .size:
-                order = a.size == b.size ? .orderedSame : (a.size < b.size ? .orderedAscending : .orderedDescending)
-            case .modified:
-                let x = a.modified ?? .distantPast, y = b.modified ?? .distantPast
-                order = x == y ? .orderedSame : (x < y ? .orderedAscending : .orderedDescending)
-            case .kind: order = a.kind.localizedStandardCompare(b.kind)
-            }
-            if order == .orderedSame { return a.name.localizedStandardCompare(b.name) == .orderedAscending }
-            return ascending ? order == .orderedAscending : order == .orderedDescending
         }
-        children.forEach { $0.sort(by: key, ascending: ascending, foldersFirst: foldersFirst) }
+        for child in children where child.isDirectory && !child.children.isEmpty {
+            child.sort(by: key, ascending: ascending, foldersFirst: foldersFirst)
+        }
     }
 
     private static let kindLock = NSLock()

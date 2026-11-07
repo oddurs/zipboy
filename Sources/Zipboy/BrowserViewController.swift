@@ -38,6 +38,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     var springLoadDelay: TimeInterval = 0.7
     /// Opens a loose file from the archive in Launch Services; replaced in tests so nothing launches.
     var openFile: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    var openWithApp: ([URL], URL) -> Void = { urls, app in
+        NSWorkspace.shared.open(urls, withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+    }
     /// Reveals extracted files in Finder; replaced in tests so no Finder window opens.
     var revealFiles: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     /// State from the last session, held until the archive has finished opening.
@@ -369,9 +372,13 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     @objc func copy(_ sender: Any?) {
+        let items = targets
+        if let document, !items.isEmpty {
+            _ = try? document.materializeSynchronously(items.map(\.path))
+        }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.writeObjects(targets.map { $0.url as NSURL })
+        pasteboard.writeObjects(items.map { $0.url as NSURL })
     }
 
     @objc func paste(_ sender: Any?) {
@@ -388,8 +395,14 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             if node.isDirectory {
                 outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
             } else if Self.isNestedArchive(node.url) {
+                if !FileManager.default.fileExists(atPath: node.url.path) {
+                    _ = try? document?.materializeSynchronously([node.path])
+                }
                 openNestedArchive(at: node.url)
             } else {
+                if !FileManager.default.fileExists(atPath: node.url.path) {
+                    _ = try? document?.materializeSynchronously([node.path])
+                }
                 openFile(node.url)
             }
         }
@@ -676,9 +689,16 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: "")
     }
 
-    @objc private func openWith(_ sender: NSMenuItem) {
+    func open(file: URL, withApplicationAt app: URL) {
+        if !FileManager.default.fileExists(atPath: file.path) {
+            try? document?.materializeURLSynchronously(file)
+        }
+        openWithApp([file], app)
+    }
+
+    @objc func openWith(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [URL], pair.count == 2 else { return }
-        NSWorkspace.shared.open([pair[1]], withApplicationAt: pair[0], configuration: NSWorkspace.OpenConfiguration())
+        open(file: pair[1], withApplicationAt: pair[0])
     }
 
     @objc private func openWithOther(_ sender: NSMenuItem) {
@@ -690,13 +710,18 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         panel.message = "Choose an app to open “\(file.lastPathComponent)”."
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, let app = panel.url else { return }
-            NSWorkspace.shared.open([file], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+            MainActor.assumeIsolated {
+                self.open(file: file, withApplicationAt: app)
+            }
         }
     }
 
     @objc private func quickLookClicked(_ sender: Any?) {
         if let node = targets.first, !selection.contains(where: { $0 === node }) {
             outline.selectRowIndexes([outline.row(forItem: node)], byExtendingSelection: false)
+        }
+        if let document, !selection.isEmpty {
+            _ = try? document.materializeSynchronously(selection.map(\.path))
         }
         QLPreviewPanel.shared().makeKeyAndOrderFront(nil)
     }
@@ -1036,6 +1061,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         if QLPreviewPanel.sharedPreviewPanelExists(), panel.isVisible {
             panel.orderOut(nil)
         } else {
+            if let document, !selection.isEmpty {
+                _ = try? document.materializeSynchronously(selection.map(\.path))
+            }
             panel.makeKeyAndOrderFront(nil)
         }
     }

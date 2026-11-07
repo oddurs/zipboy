@@ -1126,7 +1126,6 @@ final class RecordingNotifier: Notifier {
         let start = clock.now
         let catalog = try ZipCatalog.read(from: zip100k)
         let bigTree = Node.fromCatalog(catalog, workspaceRoot: dir)
-        bigTree.sort(by: .name, ascending: true)
         let elapsed = clock.now - start
 
         #expect(catalog.entries.count == 100_000)
@@ -1134,5 +1133,89 @@ final class RecordingNotifier: Notifier {
         #expect(bigTree.size == 1_000_000)
         #expect(bigTree.find("dir0")?.size == 10_000)
         #expect(elapsed < .seconds(1), "100,000-entry catalog listing took \(elapsed)")
+    }
+
+    @Test func onDemandMaterializationPreviewsUnderTwoHundredMillisecondsCoalescesAndCountsUnchanged() async throws {
+        let fm = FileManager.default
+        let src = dir.appendingPathComponent("mat-src")
+        try fm.createDirectory(at: src, withIntermediateDirectories: true)
+        let previewData = Data(repeating: 0x41, count: 1 << 20)
+        let coalesceData = Data((0..<(2 << 20)).map { UInt8(($0 * 17) & 0xff) })
+        try previewData.write(to: src.appendingPathComponent("preview.txt"))
+        try coalesceData.write(to: src.appendingPathComponent("coalesce.bin"))
+        try Data("open-payload".utf8).write(to: src.appendingPathComponent("open-me.txt"))
+        try Data("open-with-payload".utf8).write(to: src.appendingPathComponent("open-with.txt"))
+        try Data("copy-payload".utf8).write(to: src.appendingPathComponent("copy-me.txt"))
+        try Data("share-payload".utf8).write(to: src.appendingPathComponent("share-me.txt"))
+        try Data("extract-payload".utf8).write(to: src.appendingPathComponent("extract-me.txt"))
+
+        let zip = dir.appendingPathComponent("OnDemand.zip")
+        try Archive.writeZip(from: src, to: zip)
+
+        let (doc, browser) = try await open(zip)
+        defer { doc.close() }
+        let wc = try #require(doc.windowControllers.first as? ArchiveWindowController)
+        let ws = try #require(doc.workspace)
+        #expect(!ws.isCreatedOnDisk)
+
+        // 1. Selecting a file under 10 MB shows its preview within 200 ms.
+        browser.select(["preview.txt"])
+        #expect(!wc.preview.spinner.isHidden)
+        await wc.preview.previewTask?.value
+        let previewElapsed = try #require(wc.preview.lastMaterializationElapsed)
+        #expect((wc.preview.quickLook.previewItem as? NSURL) as URL? == ws.url("preview.txt"))
+        #expect(wc.preview.spinner.isHidden)
+        #expect(fm.fileExists(atPath: ws.url("preview.txt").path))
+        #expect(previewElapsed < .milliseconds(200), "Preview materialization took \(previewElapsed)")
+
+        // 2. Two concurrent requests for the same entry unpack it once.
+        let req1 = Task { try await doc.materialize(["coalesce.bin"]) }
+        let req2 = Task { try await doc.materialize(["coalesce.bin"]) }
+        let (urls1, urls2) = try await (req1.value, req2.value)
+        #expect(urls1 == [ws.url("coalesce.bin")])
+        #expect(urls2 == [ws.url("coalesce.bin")])
+        #expect(doc.materializationCounts["coalesce.bin"] == 1)
+        #expect(try Data(contentsOf: ws.url("coalesce.bin")) == coalesceData)
+
+        // 3. Open, Open With, Copy, Share, and Extract all materialize first.
+        var openedURLs: [URL] = []
+        browser.openFile = { openedURLs.append($0) }
+        browser.select(["open-me.txt"])
+        browser.openItems(nil)
+        #expect(openedURLs == [ws.url("open-me.txt")])
+        #expect(try Data(contentsOf: ws.url("open-me.txt")) == Data("open-payload".utf8))
+
+        var openedWithPairs: [(urls: [URL], app: URL)] = []
+        browser.openWithApp = { urls, app in openedWithPairs.append((urls, app)) }
+        let fakeApp = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+        browser.open(file: ws.url("open-with.txt"), withApplicationAt: fakeApp)
+        #expect(openedWithPairs.count == 1)
+        #expect(openedWithPairs.first?.urls == [ws.url("open-with.txt")])
+        #expect(try Data(contentsOf: ws.url("open-with.txt")) == Data("open-with-payload".utf8))
+
+        browser.select(["copy-me.txt"])
+        browser.copy(nil)
+        #expect(try Data(contentsOf: ws.url("copy-me.txt")) == Data("copy-payload".utf8))
+
+        browser.select(["share-me.txt"])
+        let shared = wc.items(for: NSSharingServicePickerToolbarItem(itemIdentifier: .share)) as? [URL]
+        #expect(shared == [ws.url("share-me.txt")])
+        #expect(try Data(contentsOf: ws.url("share-me.txt")) == Data("share-payload".utf8))
+
+        let extractOut = dir.appendingPathComponent("mat-extract-out")
+        try fm.createDirectory(at: extractOut, withIntermediateDirectories: true)
+        let extractNode = try #require(doc.tree?.find("extract-me.txt"))
+        await browser.extract(into: extractOut, items: [extractNode])?.value
+        #expect(
+            try Data(contentsOf: extractOut.appendingPathComponent("extract-me.txt")) == Data("extract-payload".utf8))
+
+        // 4. Materialized files count as unchanged for saving.
+        #expect(!doc.isDocumentEdited)
+        for path in [
+            "preview.txt", "coalesce.bin", "open-me.txt", "open-with.txt", "copy-me.txt", "share-me.txt",
+            "extract-me.txt",
+        ] {
+            #expect(doc.verbatimEntry(forPath: path) != nil, "\(path)")
+        }
     }
 }

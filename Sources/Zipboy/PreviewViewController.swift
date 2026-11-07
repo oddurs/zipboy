@@ -9,8 +9,9 @@ import ZipboyKit
 @MainActor
 final class PreviewViewController: NSViewController {
     private let well = NSView()
-    private let quickLook = QLPreviewView(frame: .zero, style: .compact)!
+    let quickLook = QLPreviewView(frame: .zero, style: .compact)!
     private let picture = NSImageView()
+    let spinner = NSProgressIndicator()
 
     /// The heading: what it is, then the one fact that sets it apart. The table holds the rest, so
     /// nothing is said twice.
@@ -32,6 +33,8 @@ final class PreviewViewController: NSViewController {
     private var checksums: [String: Checksums] = [:]
     /// The item on show and its key, so a checksum that finishes late doesn't land on the next one.
     private var showing: (key: String, node: Node, catalogCRC: String?, symlinkTarget: String?)?
+    private(set) var previewTask: Task<Void, Never>?
+    private(set) var lastMaterializationElapsed: Duration?
 
     override func loadView() {
 
@@ -43,7 +46,11 @@ final class PreviewViewController: NSViewController {
         well.translatesAutoresizingMaskIntoConstraints = false
         quickLook.shouldCloseWithWindow = true
         picture.imageScaling = .scaleProportionallyUpOrDown
-        for view in [quickLook, picture] as [NSView] {
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.isDisplayedWhenStopped = false
+        spinner.isHidden = true
+        for view in [quickLook, picture, spinner] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             well.addSubview(view)
         }
@@ -139,6 +146,8 @@ final class PreviewViewController: NSViewController {
             picture.centerYAnchor.constraint(equalTo: well.centerYAnchor),
             picture.widthAnchor.constraint(equalToConstant: 112),
             picture.heightAnchor.constraint(equalToConstant: 112),
+            spinner.centerXAnchor.constraint(equalTo: well.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: well.centerYAnchor),
 
             rule.topAnchor.constraint(equalTo: footer.topAnchor),
             rule.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
@@ -170,11 +179,16 @@ final class PreviewViewController: NSViewController {
     }
 
     private func showItem(_ node: Node, archive: ArchiveDocument) {
+        previewTask?.cancel()
+        previewTask = nil
         footer.isHidden = false
         let key = "\(node.url.path)|\(node.size)|\(node.modified?.timeIntervalSince1970 ?? 0)"
         let existsOnDisk = FileManager.default.fileExists(atPath: node.url.path)
-        if Self.previewsInQuickLook(node), existsOnDisk {
+        let usesQuickLook = Self.previewsInQuickLook(node)
+        if usesQuickLook, existsOnDisk {
             preview(node.url)
+        } else if usesQuickLook {
+            showSpinner()
         } else {
             picture(BrowserViewController.iconForNode(node))
         }
@@ -195,6 +209,35 @@ final class PreviewViewController: NSViewController {
                 // An unreadable file keeps the rows it has; there's nothing for the person to do about it.
                 guard let computed = try? Checksums.compute(for: url) else { return }
                 await self?.checksumsArrived(computed, key: key)
+            }
+        } else if Self.isFile(node), !existsOnDisk {
+            let path = node.path
+            let size = node.size
+            previewTask = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let clock = ContinuousClock()
+                    let matStart = clock.now
+                    let urls = try await archive.materialize([path])
+                    self.lastMaterializationElapsed = clock.now - matStart
+                    guard !Task.isCancelled, let url = urls.first, self.showing?.key == key else { return }
+                    if usesQuickLook {
+                        self.preview(url)
+                    } else {
+                        self.picture(BrowserViewController.iconForNode(node))
+                    }
+                    if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared().isVisible {
+                        QLPreviewPanel.shared().reloadData()
+                    }
+                    if self.checksums[key] == nil, size <= 64 << 20 {
+                        let computed = try? await Task.detached { try Checksums.compute(for: url) }.value
+                        guard !Task.isCancelled else { return }
+                        if let computed { self.checksumsArrived(computed, key: key) }
+                    }
+                } catch {
+                    guard !Task.isCancelled, self.showing?.key == key else { return }
+                    self.picture(BrowserViewController.iconForNode(node))
+                }
             }
         }
 
@@ -220,6 +263,8 @@ final class PreviewViewController: NSViewController {
     }
 
     private func showArchive(_ archive: ArchiveDocument) {
+        previewTask?.cancel()
+        previewTask = nil
         showing = nil
         let icon =
             archive.source.map { NSWorkspace.shared.icon(forFile: $0.path) }
@@ -262,6 +307,8 @@ final class PreviewViewController: NSViewController {
     }
 
     private func showSelection(_ nodes: [Node]) {
+        previewTask?.cancel()
+        previewTask = nil
         showing = nil
         footer.isHidden = false
         picture(Self.fan(nodes.prefix(3).map(BrowserViewController.iconForNode)))
@@ -288,7 +335,22 @@ final class PreviewViewController: NSViewController {
         isFile(node) && !ZipMethod.archiveExtensions.contains(node.url.pathExtension.lowercased())
     }
 
+    private func showSpinner() {
+        quickLook.previewItem = nil
+        quickLook.isHidden = true
+        picture.image = nil
+        picture.isHidden = true
+        spinner.isHidden = false
+        spinner.startAnimation(nil)
+    }
+
+    private func stopSpinner() {
+        spinner.stopAnimation(nil)
+        spinner.isHidden = true
+    }
+
     private func preview(_ url: URL) {
+        stopSpinner()
         picture.isHidden = true
         quickLook.isHidden = false
         if (quickLook.previewItem as? NSURL) as URL? == url {
@@ -299,6 +361,7 @@ final class PreviewViewController: NSViewController {
     }
 
     private func picture(_ image: NSImage) {
+        stopSpinner()
         quickLook.previewItem = nil
         quickLook.isHidden = true
         picture.image = image

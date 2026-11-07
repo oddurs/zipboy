@@ -7,7 +7,7 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToo
     NSSharingServicePickerToolbarItemDelegate
 {
     let browser = BrowserViewController()
-    private let preview = PreviewViewController()
+    let preview = PreviewViewController()
     private let split = InspectorSplitViewController()
     private let searchItem = NSSearchToolbarItem(itemIdentifier: .search)
     /// Long work's bar and stop button, under the toolbar while it runs.
@@ -225,8 +225,11 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     /// The selection, or with nothing selected the archive file itself.
     func items(for pickerToolbarItem: NSSharingServicePickerToolbarItem) -> [Any] {
-        let selected = browser.selection.map(\.url)
-        if !selected.isEmpty { return selected }
+        let selectedNodes = browser.selection
+        if !selectedNodes.isEmpty {
+            _ = try? archive?.materializeSynchronously(selectedNodes.map(\.path))
+            return selectedNodes.map(\.url)
+        }
         return archive?.source.map { [$0] } ?? []
     }
 
