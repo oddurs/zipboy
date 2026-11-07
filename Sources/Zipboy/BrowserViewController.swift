@@ -36,6 +36,10 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     private var springLoadWorkItem: DispatchWorkItem?
     private var springLoadTargetPath: String?
     var springLoadDelay: TimeInterval = 0.7
+    /// Opens a loose file from the archive in Launch Services; replaced in tests so nothing launches.
+    var openFile: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// Reveals extracted files in Finder; replaced in tests so no Finder window opens.
+    var revealFiles: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     /// State from the last session, held until the archive has finished opening.
     private var pendingRestore: SavedState?
 
@@ -212,7 +216,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         }
     }
 
-    private func select(_ paths: [String]) {
+    func select(_ paths: [String]) {
         let rows = IndexSet(paths.compactMap { shown?.find($0) }.map { outline.row(forItem: $0) }.filter { $0 >= 0 })
         outline.selectRowIndexes(rows, byExtendingSelection: false)
         if let first = rows.first { outline.scrollRowToVisible(first) }
@@ -386,7 +390,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             } else if Self.isNestedArchive(node.url) {
                 openNestedArchive(at: node.url)
             } else {
-                NSWorkspace.shared.open(node.url)
+                openFile(node.url)
             }
         }
     }
@@ -465,18 +469,19 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         panel.directoryURL = document?.source?.deletingLastPathComponent()
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, let folder = panel.url else { return }
-            MainActor.assumeIsolated { self.extract(into: folder, items: items) }
+            MainActor.assumeIsolated { _ = self.extract(into: folder, items: items) }
         }
     }
 
     /// The selection comes out as it is. The whole archive comes out as its one top-level item, or as a
     /// folder named after the archive holding everything, so nothing ends up in a folder inside a
     /// folder of the same name, and nothing is scattered loose.
-    private func extract(into folder: URL, items chosen: [Node]? = nil) {
+    @discardableResult
+    func extract(into folder: URL, items chosen: [Node]? = nil) -> Task<Void, Never>? {
         let items = chosen ?? targets
         let whole = items.isEmpty
         let urls = whole ? (document?.tree?.children.map(\.url) ?? []) : items.map(\.url)
-        guard !urls.isEmpty else { return }
+        guard !urls.isEmpty else { return nil }
         let wrap: Bool =
             switch Settings.shared.wrapExtractedFiles {
             case .whenMultipleItems: whole && urls.count > 1
@@ -485,7 +490,8 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             }
         let revealInFinder = Settings.shared.revealExtractedInFinder
         let base = document?.source.map(Naming.stem) ?? "Archive"
-        guard let document else { return }
+        let sourceArchive = document?.source
+        guard let document else { return nil }
         let task = document.beginTask(
             whole
                 ? "Extracting “\(document.displayName ?? "Archive")”…"
@@ -493,7 +499,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             total: FileCopy.size(of: urls))
         let progress = task.progress
         let clone = document.cloneWhenCopying
-        Task.detached {
+        return Task.detached { [weak self] in
             defer { Task { @MainActor in document.endTask(task) } }
             var destination = folder
             do {
@@ -501,11 +507,14 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
                     let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
                     destination = folder.appendingPathComponent(Naming.unique(base, isDirectory: true, taken: taken))
                     try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+                    let markSource =
+                        sourceArchive.flatMap { Archive.quarantine(of: $0) != nil ? $0 : nil } ?? urls.first
+                    if let markSource { Archive.copyQuarantine(from: markSource, to: destination) }
                 }
                 let copied = try Self.copy(urls, into: destination, progress: progress, clone: clone)
                 if revealInFinder {
                     let shown = wrap ? [destination] : copied
-                    await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting(shown) }
+                    await MainActor.run { self?.revealFiles(shown) }
                 }
             } catch {
                 // The folder made to hold everything goes too, so a stopped extract leaves no trace.

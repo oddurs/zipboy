@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import Darwin
 import Foundation
 import Testing
 import ZipboyKit
@@ -653,5 +654,169 @@ final class RecordingNotifier: Notifier {
         #expect(ran == 0)
         #expect(recovery.attemptRecovery(fromError: CocoaError(.fileWriteNoPermission), optionIndex: 0))
         #expect(ran == 1)
+    }
+}
+
+/// Quarantine marks from downloaded archives survive every exit from the app and pass into nested archives.
+@MainActor
+@Suite(.serialized) struct QuarantineTests {
+    let dir: URL
+    let attr = "com.apple.quarantine"
+    let eventID = "98765432-1234-1234-1234-ABCDEF012345"
+    var mark: Data { Data("0081;672c0000;Safari;\(eventID)".utf8) }
+
+    init() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("ZipboyQuarantine-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    func quarantine(on url: URL) -> Data? {
+        let length = getxattr(url.path, attr, nil, 0, 0, XATTR_NOFOLLOW)
+        guard length >= 0 else { return nil }
+        if length == 0 { return Data() }
+        var data = Data(count: length)
+        let read = data.withUnsafeMutableBytes {
+            getxattr(url.path, attr, $0.baseAddress, length, 0, XATTR_NOFOLLOW)
+        }
+        return read >= 0 ? Data(data.prefix(read)) : nil
+    }
+
+    /// Checks `com.apple.quarantine` carries this archive's quarantine event ID, whether written raw
+    /// by `setxattr` or canonicalized by `copyfile(3)` during an extract or drag-out copy.
+    func isQuarantined(_ url: URL) -> Bool {
+        guard let raw = quarantine(on: url), let text = String(data: raw, encoding: .utf8) else { return false }
+        return text.contains(eventID)
+    }
+
+    func markQuarantine(on url: URL) {
+        let bytes = mark
+        let rc = bytes.withUnsafeBytes {
+            setxattr(url.path, attr, $0.baseAddress, bytes.count, 0, XATTR_NOFOLLOW)
+        }
+        #expect(rc == 0)
+    }
+
+    func open(_ url: URL) async throws -> (ArchiveDocument, BrowserViewController) {
+        let document = ArchiveDocument()
+        document.fileURL = url
+        document.fileType = ArchiveDocument.zipType
+        document.makeWindowControllers()
+        let controller = try #require(document.windowControllers.first as? ArchiveWindowController)
+        controller.browser.loadViewIfNeeded()
+        controller.browser.revealFiles = { _ in }
+        try document.read(from: url, ofType: ArchiveDocument.zipType)
+        for _ in 0..<500 where document.loading != nil || document.tree == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(document.loading == nil)
+        controller.browser.reload()
+        return (document, controller.browser)
+    }
+
+    @Test func quarantineSurvivesEveryExitAndReachesNestedArchives() async throws {
+        // Build an unmarked Inner.zip, put it alongside hello.txt in Outer.zip, and mark only Outer.zip.
+        let innerSrc = dir.appendingPathComponent("inner-src")
+        try FileManager.default.createDirectory(
+            at: innerSrc.appendingPathComponent("nested"), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: innerSrc.appendingPathComponent("nested/tool"))
+        try Data("notes".utf8).write(to: innerSrc.appendingPathComponent("notes.txt"))
+        let outerSrc = dir.appendingPathComponent("outer-src")
+        try FileManager.default.createDirectory(at: outerSrc, withIntermediateDirectories: true)
+        try Archive.writeZip(from: innerSrc, to: outerSrc.appendingPathComponent("Inner.zip"))
+        try Data("hello".utf8).write(to: outerSrc.appendingPathComponent("hello.txt"))
+
+        let archiveFolder = dir.appendingPathComponent("downloads")
+        try FileManager.default.createDirectory(at: archiveFolder, withIntermediateDirectories: true)
+        let outerZip = archiveFolder.appendingPathComponent("Outer.zip")
+        try Archive.writeZip(from: outerSrc, to: outerZip)
+        markQuarantine(on: outerZip)
+
+        let savedDestination = Settings.shared.extractDestination
+        let savedWrap = Settings.shared.wrapExtractedFiles
+        Settings.shared.extractDestination = .archiveFolder
+        Settings.shared.wrapExtractedFiles = .whenMultipleItems
+        defer {
+            Settings.shared.extractDestination = savedDestination
+            Settings.shared.wrapExtractedFiles = savedWrap
+        }
+
+        let (outerDoc, browser) = try await open(outerZip)
+        defer { outerDoc.close() }
+
+        // 1. Extract (beside the archive, wrapped because Outer.zip has two top-level items).
+        browser.outline.deselectAll(nil)
+        browser.extract(nil)
+        for _ in 0..<500
+        where !outerDoc.tasks.isEmpty
+            || !FileManager.default.fileExists(
+                atPath: archiveFolder.appendingPathComponent("Outer/hello.txt").path)
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let wrappedExtract = archiveFolder.appendingPathComponent("Outer")
+        #expect(isQuarantined(wrappedExtract))
+        #expect(isQuarantined(wrappedExtract.appendingPathComponent("hello.txt")))
+        #expect(isQuarantined(wrappedExtract.appendingPathComponent("Inner.zip")))
+
+        // 2. Extract To… (both a chosen item and the whole archive).
+        let extractOneDir = dir.appendingPathComponent("extract-to-one")
+        try FileManager.default.createDirectory(at: extractOneDir, withIntermediateDirectories: true)
+        let helloNode = try #require(outerDoc.tree?.find("hello.txt"))
+        await browser.extract(into: extractOneDir, items: [helloNode])?.value
+        #expect(isQuarantined(extractOneDir.appendingPathComponent("hello.txt")))
+
+        let extractAllDir = dir.appendingPathComponent("extract-to-all")
+        try FileManager.default.createDirectory(at: extractAllDir, withIntermediateDirectories: true)
+        await browser.extract(into: extractAllDir, items: [])?.value
+        #expect(isQuarantined(extractAllDir.appendingPathComponent("Outer")))
+        #expect(isQuarantined(extractAllDir.appendingPathComponent("Outer/hello.txt")))
+
+        // 3. Extract Here service.
+        let serviceDir = dir.appendingPathComponent("service-out")
+        try FileManager.default.createDirectory(at: serviceDir, withIntermediateDirectories: true)
+        let serviceResults = try AppDelegate.extractArchives([outerZip], into: serviceDir)
+        #expect(serviceResults.map(\.path) == [serviceDir.appendingPathComponent("Outer").path])
+        #expect(isQuarantined(serviceDir.appendingPathComponent("Outer")))
+        #expect(isQuarantined(serviceDir.appendingPathComponent("Outer/hello.txt")))
+        #expect(isQuarantined(serviceDir.appendingPathComponent("Outer/Inner.zip")))
+
+        // 4. AppleScript `extract`.
+        let scriptDir = dir.appendingPathComponent("script-out")
+        try FileManager.default.createDirectory(at: scriptDir, withIntermediateDirectories: true)
+        let scriptResults = try Scripting.extract(outerZip, to: scriptDir)
+        #expect(scriptResults.map(\.path) == [scriptDir.appendingPathComponent("Outer").path])
+        #expect(isQuarantined(scriptDir.appendingPathComponent("Outer")))
+        #expect(isQuarantined(scriptDir.appendingPathComponent("Outer/hello.txt")))
+
+        // 5. Opening a file from the list (and dragging out via file promise).
+        var opened: [URL] = []
+        browser.openFile = { opened.append($0) }
+        browser.select(["hello.txt"])
+        browser.openItems(nil)
+        #expect(opened.count == 1)
+        #expect(isQuarantined(try #require(opened.first)))
+
+        let promised = dir.appendingPathComponent("promised-hello.txt")
+        let provider = browser.filePromiseProvider(for: helloNode)
+        var promiseError: Error?
+        browser.filePromiseProvider(provider, writePromiseTo: promised) { promiseError = $0 }
+        #expect(promiseError == nil)
+        #expect(isQuarantined(promised))
+
+        // 6. Nested archive opened from the marked archive passes the mark to everything it unpacks.
+        let innerURL = try #require(outerDoc.tree?.find("Inner.zip")?.url)
+        #expect(isQuarantined(innerURL))
+        let (innerDoc, innerBrowser) = try await open(innerURL)
+        innerDoc.parentDocument = outerDoc
+        defer { innerDoc.close() }
+        for path in ["nested", "nested/tool", "notes.txt"] {
+            let unpacked = try #require(innerDoc.tree?.find(path)?.url)
+            #expect(isQuarantined(unpacked), "\(path)")
+        }
+        let nestedExtractDir = dir.appendingPathComponent("nested-extract")
+        try FileManager.default.createDirectory(at: nestedExtractDir, withIntermediateDirectories: true)
+        await innerBrowser.extract(into: nestedExtractDir, items: [])?.value
+        #expect(isQuarantined(nestedExtractDir.appendingPathComponent("Inner")))
+        #expect(isQuarantined(nestedExtractDir.appendingPathComponent("Inner/nested/tool")))
     }
 }

@@ -3,10 +3,12 @@ id: 90
 uid: 86d84b83-5be4-4d6c-9040-299c706dd960
 title: Extracted files keep the quarantine mark of the archive they came from
 type: bug
-status: backlog
+status: done
 milestone: v0.1
+assignee: Oddur Sigurdsson
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
+closed_at: 2026-11-07
 priority: p0
 effort: s
 area: archive
@@ -30,7 +32,15 @@ Prefer this to `LSFileQuarantineEnabled`, which would also mark every ZIP Zipboy
 
 ## Acceptance criteria
 
-- [ ] A test extracts an archive carrying `com.apple.quarantine` and finds the attribute on every file and folder, and it fails without the fix
-- [ ] An archive with no quarantine mark gives extracted files none
-- [ ] The mark survives each way out of the app: Extract, Extract To…, the Extract Here service, AppleScript `extract`, and a file opened from the list
-- [ ] A nested archive opened from a marked archive passes the mark to what it unpacks
+- [x] A test extracts an archive carrying `com.apple.quarantine` and finds the attribute on every file and folder, and it fails without the fix
+- [x] An archive with no quarantine mark gives extracted files none
+- [x] The mark survives each way out of the app: Extract, Extract To…, the Extract Here service, AppleScript `extract`, and a file opened from the list
+- [x] A nested archive opened from a marked archive passes the mark to what it unpacks
+
+## 2026-11-07
+
+Evidence. Reproduced before the fix: both ArchiveTests.propagatesQuarantineOntoEveryUnpackedItemAndLeavesUnmarkedArchivesClean and QuarantineTests.quarantineSurvivesEveryExitAndReachesNestedArchives failed with nil extended attributes on every unpacked path. Archive.extract now reads com.apple.quarantine from the archive with getxattr(..., XATTR_NOFOLLOW) and stamps every unpacked file, folder (explicit and implicit), hard link, and symlink under root before restoring folder dates; wrapped destination folders created by BrowserViewController.extract and AppDelegate.extractArchives copy it too. Testing FileCopy confirmed copyfile(3) rewrites the quarantine header flags/timestamp (0081 -> 0281) while keeping the quarantine event UUID intact.
+
+## Result
+
+Archive.extract and wrapped extraction folders preserve com.apple.quarantine across workspace opens, Extract, Extract To, Finder services, AppleScript, drag-out promises, and nested archives.

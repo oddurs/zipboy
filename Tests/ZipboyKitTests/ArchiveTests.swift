@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 import zlib
@@ -741,6 +742,96 @@ import zlib
         )
         #expect(wrongPwd.title.contains("password"))
         #expect(wrongPwd.title.contains("“secret.zip”"))
+    }
+
+    private func xattr(_ name: String, on url: URL) -> Data? {
+        let length = getxattr(url.path, name, nil, 0, 0, XATTR_NOFOLLOW)
+        guard length >= 0 else { return nil }
+        if length == 0 { return Data() }
+        var data = Data(count: length)
+        let read = data.withUnsafeMutableBytes {
+            getxattr(url.path, name, $0.baseAddress, length, 0, XATTR_NOFOLLOW)
+        }
+        return read >= 0 ? Data(data.prefix(read)) : nil
+    }
+
+    private func setXattr(_ name: String, _ value: Data, on url: URL) throws {
+        let rc = value.withUnsafeBytes {
+            setxattr(url.path, name, $0.baseAddress, value.count, 0, XATTR_NOFOLLOW)
+        }
+        #expect(rc == 0)
+    }
+
+    @Test func propagatesQuarantineOntoEveryUnpackedItemAndLeavesUnmarkedArchivesClean() throws {
+        let attr = "com.apple.quarantine"
+        let eventID = "12345678-1234-1234-1234-123456789ABC"
+        let mark = Data("0081;672c0000;Safari;\(eventID)".utf8)
+
+        let source = try folder("quarantine-source")
+        try write("hello", to: "a.txt", in: source)
+        try write("#!/bin/sh\n", to: "App.app/Contents/MacOS/App", in: source)
+        try FileManager.default.createDirectory(
+            at: source.appendingPathComponent("empty"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            atPath: source.appendingPathComponent("link").path, withDestinationPath: "a.txt")
+
+        let markedZip = dir.appendingPathComponent("marked.zip")
+        try Archive.writeZip(from: source, to: markedZip)
+        try setXattr(attr, mark, on: markedZip)
+
+        let markedOut = try folder("marked-out")
+        _ = try Archive.extract(markedZip, into: markedOut)
+        let zipPaths = [
+            "a.txt", "App.app", "App.app/Contents", "App.app/Contents/MacOS", "App.app/Contents/MacOS/App",
+            "empty", "link",
+        ]
+        for path in zipPaths {
+            #expect(xattr(attr, on: markedOut.appendingPathComponent(path)) == mark, "\(path)")
+        }
+
+        // Also check implicit parent folders and hard links in a tar archive.
+        let tarSource = try folder("tar-source")
+        try write("payload", to: "implicit/deep/run.sh", in: tarSource)
+        try FileManager.default.linkItem(
+            at: tarSource.appendingPathComponent("implicit/deep/run.sh"),
+            to: tarSource.appendingPathComponent("implicit/hard.sh"))
+        let markedTar = dir.appendingPathComponent("marked.tar")
+        let (status, out) = try run(
+            "/usr/bin/bsdtar",
+            ["-cf", markedTar.path, "-C", tarSource.path, "implicit/deep/run.sh", "implicit/hard.sh"])
+        #expect(status == 0, "\(out)")
+        try setXattr(attr, mark, on: markedTar)
+
+        let tarOut = try folder("tar-out")
+        _ = try Archive.extract(markedTar, into: tarOut)
+        for path in ["implicit", "implicit/deep", "implicit/deep/run.sh", "implicit/hard.sh"] {
+            #expect(xattr(attr, on: tarOut.appendingPathComponent(path)) == mark, "\(path)")
+        }
+
+        // copyfile(3) rewrites the quarantine header flags/timestamp while preserving the event UUID.
+        func hasQuarantineEvent(_ url: URL) -> Bool {
+            guard let raw = xattr(attr, on: url), let text = String(data: raw, encoding: .utf8) else { return false }
+            return text.contains(eventID)
+        }
+        let cloned = dir.appendingPathComponent("cloned-app")
+        try FileCopy.copy(markedOut.appendingPathComponent("App.app"), to: cloned, clone: true) { _ in true }
+        #expect(hasQuarantineEvent(cloned))
+        #expect(hasQuarantineEvent(cloned.appendingPathComponent("Contents/MacOS/App")))
+
+        let streamed = dir.appendingPathComponent("streamed-app")
+        try FileCopy.copy(markedOut.appendingPathComponent("App.app"), to: streamed, clone: false) { _ in true }
+        #expect(hasQuarantineEvent(streamed))
+        #expect(hasQuarantineEvent(streamed.appendingPathComponent("Contents/MacOS/App")))
+
+        // An archive without com.apple.quarantine gives extracted items none.
+        let cleanZip = dir.appendingPathComponent("clean.zip")
+        try Archive.writeZip(from: source, to: cleanZip)
+        #expect(xattr(attr, on: cleanZip) == nil)
+        let cleanOut = try folder("clean-out")
+        _ = try Archive.extract(cleanZip, into: cleanOut)
+        for path in zipPaths {
+            #expect(xattr(attr, on: cleanOut.appendingPathComponent(path)) == nil, "\(path)")
+        }
     }
 }
 
