@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// apart by identity.
 public final class Node {
     public let url: URL
+    public let name: String
     /// Slash-separated, from the archive's root.
     public let path: String
     public let isDirectory: Bool
@@ -15,8 +16,17 @@ public final class Node {
     public private(set) var children: [Node] = []
     public private(set) weak var parent: Node?
 
-    init(url: URL, path: String, isDirectory: Bool, isSymlink: Bool, size: Int64, modified: Date?) {
+    init(
+        url: URL,
+        name: String? = nil,
+        path: String,
+        isDirectory: Bool,
+        isSymlink: Bool,
+        size: Int64,
+        modified: Date?
+    ) {
         self.url = url
+        self.name = name ?? url.lastPathComponent
         self.path = path
         self.isDirectory = isDirectory
         self.isSymlink = isSymlink
@@ -24,16 +34,158 @@ public final class Node {
         self.modified = modified
     }
 
-    public var name: String { url.lastPathComponent }
-
     /// Files and folders below this one, not counting itself.
     public var descendantCount: Int { children.reduce(children.count) { $0 + $1.descendantCount } }
 
     /// Reads the tree under `root`. The root node itself stands for the archive.
-    public static func scan(_ root: URL) -> Node {
-        let node = Node(url: root, path: "", isDirectory: true, isSymlink: false, size: 0, modified: nil)
-        node.load()
+    public static func scan(
+        _ root: URL,
+        unmaterialized: [String: ZipCatalog.Entry] = [:],
+        unmaterializedFolders: [String: Date?] = [:]
+    ) -> Node {
+        let rootExists = FileManager.default.fileExists(atPath: root.path)
+        let node = Node(
+            url: root, name: root.lastPathComponent, path: "", isDirectory: true, isSymlink: false, size: 0,
+            modified: nil)
+        if rootExists {
+            node.load()
+        }
+        guard !unmaterialized.isEmpty || !unmaterializedFolders.isEmpty else {
+            return node
+        }
+        node.mergeCatalog(
+            workspaceRoot: root,
+            entries: unmaterialized.map { (path: $0.key, entry: $0.value) },
+            extraFolders: unmaterializedFolders,
+            checkExistingChildren: rootExists
+        )
         return node
+    }
+
+    /// Builds the `Node` tree directly from a parsed `ZipCatalog` without touching the disk.
+    public static func fromCatalog(_ catalog: ZipCatalog, workspaceRoot: URL) -> Node {
+        let root = Node(
+            url: workspaceRoot,
+            name: workspaceRoot.lastPathComponent,
+            path: "",
+            isDirectory: true,
+            isSymlink: false,
+            size: 0,
+            modified: nil
+        )
+        root.mergeCatalog(
+            workspaceRoot: workspaceRoot,
+            entries: catalog.entries.map { (path: $0.path, entry: $0) },
+            extraFolders: [:],
+            checkExistingChildren: false
+        )
+        return root
+    }
+
+    private func mergeCatalog<S: Sequence>(
+        workspaceRoot: URL,
+        entries: S,
+        extraFolders: [String: Date?],
+        checkExistingChildren: Bool
+    ) where S.Element == (path: String, entry: ZipCatalog.Entry) {
+        var folders: [String: Node] = ["": self]
+        var existingByPath: Set<String> = []
+        if checkExistingChildren {
+            func indexExisting(_ current: Node) {
+                for child in current.children {
+                    existingByPath.insert(child.path)
+                    if child.isDirectory {
+                        folders[child.path] = child
+                        indexExisting(child)
+                    }
+                }
+            }
+            indexExisting(self)
+        }
+
+        func ensureFolder(_ folderPath: String) -> Node {
+            if let existing = folders[folderPath] { return existing }
+            let parentPath: String
+            let folderName: String
+            if let slash = folderPath.lastIndex(of: "/") {
+                parentPath = String(folderPath[..<slash])
+                folderName = String(folderPath[folderPath.index(after: slash)...])
+            } else {
+                parentPath = ""
+                folderName = folderPath
+            }
+            let parentNode = ensureFolder(parentPath)
+            let folderURL = parentNode.url.appendingPathComponent(folderName, isDirectory: true)
+            let folder = Node(
+                url: folderURL,
+                name: folderName,
+                path: folderPath,
+                isDirectory: true,
+                isSymlink: false,
+                size: 0,
+                modified: nil
+            )
+            folder.parent = parentNode
+            parentNode.children.append(folder)
+            folders[folderPath] = folder
+            existingByPath.insert(folderPath)
+            return folder
+        }
+
+        for (rawPath, entry) in entries {
+            let path = rawPath.hasSuffix("/") ? String(rawPath.dropLast()) : rawPath
+            guard !path.isEmpty else { continue }
+            if entry.isDirectory {
+                let folder = ensureFolder(path)
+                if folder.modified == nil, let mod = entry.modified {
+                    folder.modified = mod
+                }
+                continue
+            }
+            if existingByPath.contains(path) { continue }
+            let parentPath: String
+            let leafName: String
+            if let slash = path.lastIndex(of: "/") {
+                parentPath = String(path[..<slash])
+                leafName = String(path[path.index(after: slash)...])
+            } else {
+                parentPath = ""
+                leafName = path
+            }
+            let parentNode = ensureFolder(parentPath)
+            let childURL = parentNode.url.appendingPathComponent(leafName, isDirectory: false)
+            let child = Node(
+                url: childURL,
+                name: leafName,
+                path: path,
+                isDirectory: false,
+                isSymlink: entry.isSymlink,
+                size: Int64(clamping: entry.uncompressedSize),
+                modified: entry.modified
+            )
+            child.parent = parentNode
+            parentNode.children.append(child)
+            existingByPath.insert(path)
+        }
+
+        for (folderPath, mod) in extraFolders where !folderPath.isEmpty {
+            let folder = ensureFolder(folderPath)
+            if folder.modified == nil, let mod {
+                folder.modified = mod
+            }
+        }
+
+        _ = recomputeSizes()
+    }
+
+    private func recomputeSizes() -> Int64 {
+        guard isDirectory else { return size }
+        var total: Int64 = 0
+        for child in children {
+            total += child.recomputeSizes()
+        }
+        size = total
+        return total
     }
 
     private func load() {
@@ -43,9 +195,11 @@ public final class Node {
         children = urls.filter { !EntryPath.isJunk($0.lastPathComponent) }.map { url in
             let values = try? url.resourceValues(forKeys: Set(keys))
             let isSymlink = values?.isSymbolicLink == true
+            let itemName = url.lastPathComponent
             let child = Node(
                 url: url,
-                path: path.isEmpty ? url.lastPathComponent : "\(path)/\(url.lastPathComponent)",
+                name: itemName,
+                path: path.isEmpty ? itemName : "\(path)/\(itemName)",
                 isDirectory: values?.isDirectory == true && !isSymlink,
                 isSymlink: isSymlink,
                 size: Int64(values?.fileSize ?? 0),
@@ -76,7 +230,8 @@ public final class Node {
         let kept = children.compactMap { $0.filtered(query, showHiddenFiles: showHiddenFiles) }
         if query.isEmpty {
             let copy = Node(
-                url: url, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size, modified: modified)
+                url: url, name: name, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size,
+                modified: modified)
             copy.children = kept
             copy.children.forEach { $0.parent = copy }
             return copy
@@ -84,7 +239,8 @@ public final class Node {
         let matches = !path.isEmpty && name.localizedStandardContains(query)
         guard matches || !kept.isEmpty || path.isEmpty else { return nil }
         let copy = Node(
-            url: url, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size, modified: modified)
+            url: url, name: name, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size,
+            modified: modified)
         // A matching folder keeps all of its contents, so a search can narrow to a folder and browse it.
         copy.children = matches ? children.compactMap { $0.copied(showHiddenFiles: showHiddenFiles) } : kept
         copy.children.forEach { $0.parent = copy }
@@ -94,7 +250,8 @@ public final class Node {
     private func copied(showHiddenFiles: Bool = true) -> Node? {
         if !path.isEmpty, !showHiddenFiles, name.hasPrefix(".") { return nil }
         let copy = Node(
-            url: url, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size, modified: modified)
+            url: url, name: name, path: path, isDirectory: isDirectory, isSymlink: isSymlink, size: size,
+            modified: modified)
         copy.children = children.compactMap { $0.copied(showHiddenFiles: showHiddenFiles) }
         copy.children.forEach { $0.parent = copy }
         return copy
@@ -122,17 +279,24 @@ public final class Node {
         children.forEach { $0.sort(by: key, ascending: ascending, foldersFirst: foldersFirst) }
     }
 
+    private static let kindLock = NSLock()
+    nonisolated(unsafe) private static var kindCache: [String: String] = [:]
+
     /// The localized kind Finder shows, such as "PNG image".
     public var kind: String {
         if isDirectory { return "Folder" }
         if isSymlink { return "Alias" }
-        if let desc = (try? url.resourceValues(forKeys: [.localizedTypeDescriptionKey]))?.localizedTypeDescription {
-            return desc
+        let ext = (name as NSString).pathExtension.lowercased()
+        if !ext.isEmpty {
+            if let cached = Self.kindLock.withLock({ Self.kindCache[ext] }) {
+                return cached
+            }
+            if let type = UTType(filenameExtension: ext), let desc = type.localizedDescription {
+                Self.kindLock.withLock { Self.kindCache[ext] = desc }
+                return desc
+            }
         }
-        if let ext = url.pathExtension.isEmpty ? nil : url.pathExtension,
-            let type = UTType(filenameExtension: ext),
-            let desc = type.localizedDescription
-        {
+        if let desc = (try? url.resourceValues(forKeys: [.localizedTypeDescriptionKey]))?.localizedTypeDescription {
             return desc
         }
         return "Document"

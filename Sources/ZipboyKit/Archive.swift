@@ -1,6 +1,7 @@
 import CArchive
 import Darwin
 import Foundation
+import zlib
 
 public enum ArchiveError: LocalizedError, Equatable {
     case passwordRequired
@@ -560,7 +561,7 @@ public enum Archive {
         setQuarantine(mark, on: destination)
     }
 
-    private static func setQuarantine(_ mark: Data, on url: URL) {
+    public static func setQuarantine(_ mark: Data, on url: URL) {
         _ = mark.withUnsafeBytes {
             setxattr(url.path, quarantineAttribute, $0.baseAddress, mark.count, 0, XATTR_NOFOLLOW)
         }
@@ -576,6 +577,398 @@ public enum Archive {
             }
         }
         walk(root)
+    }
+
+    /// Reads the target path of a symlink `entry` from `sourceZip` (or `sourceHandle`) without writing
+    /// anything to disk.
+    public static func readSymlinkTarget(
+        _ entry: ZipCatalog.Entry,
+        from sourceZip: URL,
+        sourceHandle: FileHandle? = nil
+    ) -> String? {
+        guard entry.isSymlink, !entry.isEncrypted else { return nil }
+        guard let data = try? readEntryData(entry, from: sourceZip, sourceHandle: sourceHandle, maxBytes: 4096) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Extracts a single `ZipCatalog.Entry` from `sourceZip` (or `sourceHandle`) to `destination`
+    /// atomically via a staging file. When `quarantineRoot` or `quarantineMark` is supplied, the
+    /// archive's quarantine attribute is applied to `destination` and any parent directories created
+    /// under `quarantineRoot`.
+    public static func extractEntry(
+        _ entry: ZipCatalog.Entry,
+        from sourceZip: URL,
+        sourceHandle: FileHandle? = nil,
+        to destination: URL,
+        quarantineRoot: URL? = nil,
+        quarantineMark: Data? = nil,
+        encoding: TextEncoding = .auto,
+        progress: ((Int64) -> Bool)? = nil
+    ) throws {
+        let fm = FileManager.default
+        let mark = quarantineMark ?? quarantine(of: sourceZip)
+
+        func ensureParents(of target: URL) throws {
+            let parent = target.deletingLastPathComponent()
+            try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+            if let mark, let root = quarantineRoot {
+                let rootPath = root.standardizedFileURL.path
+                var dir = parent.standardizedFileURL
+                while dir.path.count > rootPath.count && dir.path.hasPrefix(rootPath) {
+                    setQuarantine(mark, on: dir)
+                    dir.deleteLastPathComponent()
+                }
+            }
+        }
+
+        if entry.isDirectory {
+            try ensureParents(of: destination)
+            if !isDirectory(destination) {
+                try? fm.removeItem(at: destination)
+                try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            }
+            let perm = (entry.posixPermissions != 0 ? entry.posixPermissions : 0o755) | 0o700
+            var attrs: [FileAttributeKey: Any] = [.posixPermissions: perm]
+            if let modified = entry.modified { attrs[.modificationDate] = modified }
+            try? fm.setAttributes(attrs, ofItemAtPath: destination.path)
+            if let mark { setQuarantine(mark, on: destination) }
+            return
+        }
+
+        if entry.isSymlink {
+            let data = try readEntryData(entry, from: sourceZip, sourceHandle: sourceHandle, maxBytes: 65_536)
+            let target = String(data: data, encoding: .utf8) ?? ""
+            guard EntryPath.linkStaysInside(path: entry.path, target: target) else { return }
+            try ensureParents(of: destination)
+            try? fm.removeItem(at: destination)
+            try fm.createSymbolicLink(atPath: destination.path, withDestinationPath: target)
+            if let mark { setQuarantine(mark, on: destination) }
+            return
+        }
+
+        try ensureParents(of: destination)
+        let stagingDir = quarantineRoot?.deletingLastPathComponent() ?? destination.deletingLastPathComponent()
+        let staging = stagingDir.appendingPathComponent(".Zipboy-mat-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: staging) }
+
+        guard fm.createFile(atPath: staging.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: staging.path])
+        }
+
+        if !entry.isEncrypted && (entry.method == 0 || entry.method == 8) {
+            let ownedHandle: FileHandle? = sourceHandle == nil ? try FileHandle(forReadingFrom: sourceZip) : nil
+            defer { try? ownedHandle?.close() }
+            guard let inHandle = sourceHandle ?? ownedHandle else {
+                throw ArchiveError.unreadable("Missing source archive.")
+            }
+            let out = try FileHandle(forWritingTo: staging)
+            defer { try? out.close() }
+            try streamZipPayload(
+                entry,
+                fromFD: inHandle.fileDescriptor,
+                toFD: out.fileDescriptor,
+                progress: progress
+            )
+        } else if !entry.isEncrypted && entry.method == 9 {
+            let out = try FileHandle(forWritingTo: staging)
+            defer { try? out.close() }
+            var budget: Int64? = nil
+            try Deflate64.extract(
+                named: entry.rawPath,
+                occurrence: 0,
+                from: sourceZip,
+                encoding: encoding,
+                to: out,
+                budget: &budget,
+                capacity: { nil },
+                report: {
+                    if let progress, !progress(0) { throw ArchiveError.cancelled }
+                },
+                admit: { _, _ in }
+            )
+        } else {
+            try extractSingleViaLibarchive(
+                entryPath: entry.path,
+                from: sourceZip,
+                encoding: encoding,
+                to: staging,
+                progress: progress
+            )
+        }
+
+        let perm = (entry.posixPermissions != 0 ? entry.posixPermissions : 0o644) | 0o600
+        var attrs: [FileAttributeKey: Any] = [.posixPermissions: perm]
+        if let modified = entry.modified { attrs[.modificationDate] = modified }
+        try fm.setAttributes(attrs, ofItemAtPath: staging.path)
+        if let mark { setQuarantine(mark, on: staging) }
+        guard rename(staging.path, destination.path) == 0 else {
+            throw unwritable(errno)
+        }
+    }
+
+    private static func readEntryData(
+        _ entry: ZipCatalog.Entry,
+        from sourceZip: URL,
+        sourceHandle: FileHandle?,
+        maxBytes: Int
+    ) throws -> Data {
+        let ownedHandle: FileHandle? = sourceHandle == nil ? try FileHandle(forReadingFrom: sourceZip) : nil
+        defer { try? ownedHandle?.close() }
+        guard let inHandle = sourceHandle ?? ownedHandle else {
+            throw ArchiveError.unreadable("Missing source archive.")
+        }
+        let fd = inHandle.fileDescriptor
+        let dataOffset = try payloadOffset(of: entry, inFD: fd)
+        let compLen = Int(min(entry.compressedSize, UInt64(maxBytes * 2 + 64)))
+        var compBuf = [UInt8](repeating: 0, count: compLen)
+        guard let pos = off_t(exactly: dataOffset) else {
+            throw ArchiveError.unreadable("ZIP entry offset out of bounds.")
+        }
+        let readCount = try compBuf.withUnsafeMutableBufferPointer { raw -> Int in
+            guard let base = raw.baseAddress else { return 0 }
+            return try preadBytes(fd: fd, into: base, count: compLen, offset: pos)
+        }
+        if entry.method == 0 {
+            return Data(compBuf.prefix(min(readCount, maxBytes)))
+        }
+        guard entry.method == 8 else {
+            throw ArchiveError.unreadable("Unsupported compression method for symlink.")
+        }
+        var stream = z_stream()
+        guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+            throw ArchiveError.unreadable("Failed to initialize Deflate decoder.")
+        }
+        defer { inflateEnd(&stream) }
+        let outCap = min(max(Int(entry.uncompressedSize), 256), maxBytes)
+        var outBuf = [UInt8](repeating: 0, count: outCap)
+        let produced: Int = try compBuf.withUnsafeMutableBufferPointer { rawIn in
+            try outBuf.withUnsafeMutableBufferPointer { rawOut in
+                stream.next_in = rawIn.baseAddress
+                stream.avail_in = uInt(readCount)
+                stream.next_out = rawOut.baseAddress
+                stream.avail_out = uInt(outCap)
+                let status = zlib.inflate(&stream, Z_FINISH)
+                guard status == Z_STREAM_END || status == Z_OK || status == Z_BUF_ERROR else {
+                    throw ArchiveError.unreadable("Corrupt Deflate stream.")
+                }
+                return outCap - Int(stream.avail_out)
+            }
+        }
+        return Data(outBuf.prefix(produced))
+    }
+
+    private static func payloadOffset(of entry: ZipCatalog.Entry, inFD fd: Int32) throws -> UInt64 {
+        var local = [UInt8](repeating: 0, count: 30)
+        guard let headerPos = off_t(exactly: entry.localHeaderOffset) else {
+            throw ArchiveError.unreadable("ZIP entry offset out of bounds.")
+        }
+        let readHeader = try local.withUnsafeMutableBufferPointer { raw -> Int in
+            guard let base = raw.baseAddress else { return 0 }
+            return try preadBytes(fd: fd, into: base, count: 30, offset: headerPos)
+        }
+        let sig =
+            UInt32(local[0]) | (UInt32(local[1]) << 8) | (UInt32(local[2]) << 16) | (UInt32(local[3]) << 24)
+        guard readHeader == 30, sig == 0x0403_4b50 else {
+            throw ArchiveError.unreadable("Corrupt Local File Header for “\(entry.path)”.")
+        }
+        let localNameLen = UInt64(local[26]) | (UInt64(local[27]) << 8)
+        let localExtraLen = UInt64(local[28]) | (UInt64(local[29]) << 8)
+        return entry.localHeaderOffset + 30 + localNameLen + localExtraLen
+    }
+
+    private static func streamZipPayload(
+        _ entry: ZipCatalog.Entry,
+        fromFD inFD: Int32,
+        toFD outFD: Int32,
+        progress: ((Int64) -> Bool)?
+    ) throws {
+        let dataOffset = try payloadOffset(of: entry, inFD: inFD)
+        var crc: uLong = zlib.crc32(0, nil, 0)
+        var totalOut: UInt64 = 0
+        var remainingIn = entry.compressedSize
+        var currentOffset = dataOffset
+
+        if let progress, !progress(0) { throw ArchiveError.cancelled }
+
+        if entry.method == 0 {
+            var buf = [UInt8](repeating: 0, count: Int(min(UInt64(chunk), max(remainingIn, 1))))
+            while remainingIn > 0 {
+                let step = Int(min(UInt64(buf.count), remainingIn))
+                guard let pos = off_t(exactly: currentOffset) else {
+                    throw ArchiveError.unreadable("ZIP entry offset out of bounds.")
+                }
+                let n = try buf.withUnsafeMutableBufferPointer { raw -> Int in
+                    guard let base = raw.baseAddress else { return 0 }
+                    return try preadBytes(fd: inFD, into: base, count: step, offset: pos)
+                }
+                guard n > 0 else {
+                    throw ArchiveError.unreadable("Unexpected end of file while reading “\(entry.path)”.")
+                }
+                buf.withUnsafeBufferPointer { raw in
+                    if let base = raw.baseAddress {
+                        crc = zlib.crc32(crc, base, uInt(n))
+                    }
+                }
+                try buf.withUnsafeBufferPointer { raw in
+                    if let base = raw.baseAddress {
+                        try writeAllFD(fd: outFD, from: base, count: n)
+                    }
+                }
+                currentOffset += UInt64(n)
+                remainingIn -= UInt64(n)
+                totalOut += UInt64(n)
+                if let progress, !progress(Int64(clamping: totalOut)) {
+                    throw ArchiveError.cancelled
+                }
+            }
+        } else {
+            var stream = z_stream()
+            guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+                throw ArchiveError.unreadable("Failed to initialize Deflate decoder.")
+            }
+            defer { inflateEnd(&stream) }
+
+            var inBuf = [UInt8](repeating: 0, count: Int(min(UInt64(chunk), max(remainingIn, 1))))
+            var outBuf = [UInt8](repeating: 0, count: chunk)
+            var finishedStream = remainingIn == 0 && entry.uncompressedSize == 0
+
+            while remainingIn > 0 && !finishedStream {
+                let step = Int(min(UInt64(inBuf.count), remainingIn))
+                guard let pos = off_t(exactly: currentOffset) else {
+                    throw ArchiveError.unreadable("ZIP entry offset out of bounds.")
+                }
+                let n = try inBuf.withUnsafeMutableBufferPointer { raw -> Int in
+                    guard let base = raw.baseAddress else { return 0 }
+                    return try preadBytes(fd: inFD, into: base, count: step, offset: pos)
+                }
+                guard n > 0 else {
+                    throw ArchiveError.unreadable("Unexpected end of file while reading “\(entry.path)”.")
+                }
+                currentOffset += UInt64(n)
+                remainingIn -= UInt64(n)
+
+                try inBuf.withUnsafeMutableBufferPointer { rawIn in
+                    stream.next_in = rawIn.baseAddress
+                    stream.avail_in = uInt(n)
+                    while stream.avail_in > 0 && !finishedStream {
+                        let (produced, status) = try outBuf.withUnsafeMutableBufferPointer { rawOut -> (Int, Int32) in
+                            stream.next_out = rawOut.baseAddress
+                            stream.avail_out = uInt(rawOut.count)
+                            let st = zlib.inflate(&stream, Z_NO_FLUSH)
+                            guard st == Z_OK || st == Z_STREAM_END else {
+                                throw ArchiveError.unreadable("Corrupt Deflate data in “\(entry.path)”.")
+                            }
+                            return (rawOut.count - Int(stream.avail_out), st)
+                        }
+                        if produced > 0 {
+                            outBuf.withUnsafeBufferPointer { rawOut in
+                                if let base = rawOut.baseAddress {
+                                    crc = zlib.crc32(crc, base, uInt(produced))
+                                }
+                            }
+                            try outBuf.withUnsafeBufferPointer { rawOut in
+                                if let base = rawOut.baseAddress {
+                                    try writeAllFD(fd: outFD, from: base, count: produced)
+                                }
+                            }
+                            totalOut += UInt64(produced)
+                            if let progress, !progress(Int64(clamping: totalOut)) {
+                                throw ArchiveError.cancelled
+                            }
+                        }
+                        if status == Z_STREAM_END {
+                            finishedStream = true
+                        }
+                    }
+                }
+            }
+            guard finishedStream else {
+                throw ArchiveError.unreadable("Truncated Deflate stream in “\(entry.path)”.")
+            }
+        }
+
+        guard totalOut == entry.uncompressedSize else {
+            throw ArchiveError.suspiciousArchive(
+                "The entry “\(entry.path)” uncompressed to \(totalOut) bytes instead of its declared \(entry.uncompressedSize) bytes."
+            )
+        }
+        guard UInt32(truncatingIfNeeded: crc) == entry.crc32 else {
+            throw ArchiveError.unreadable("Bad CRC-32 checksum in “\(entry.path)”.")
+        }
+    }
+
+    private static func extractSingleViaLibarchive(
+        entryPath: String,
+        from archive: URL,
+        encoding: TextEncoding,
+        to staging: URL,
+        progress: ((Int64) -> Bool)?
+    ) throws {
+        useUTF8Names()
+        let utf8Flagged = utf8FlaggedNames(in: archive, encoding: encoding)
+        guard let a = archive_read_new() else { throw ArchiveError.unreadable("Out of memory.") }
+        defer { archive_read_free(a) }
+        archive_read_support_filter_all(a)
+        for support in formats { _ = support(a) }
+        guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else {
+            throw ArchiveError.unreadable(message(a))
+        }
+        var buffer = [UInt8](repeating: 0, count: chunk)
+        var entry: OpaquePointer?
+        while archive_read_next_header(a, &entry) >= ARCHIVE_WARN, let current = entry {
+            let raw = name(of: current, in: a, encoding: encoding, utf8Flagged: utf8Flagged)
+            guard EntryPath.sanitized(raw) == entryPath else {
+                archive_read_data_skip(a)
+                continue
+            }
+            let out = try FileHandle(forWritingTo: staging)
+            defer { try? out.close() }
+            var written: Int64 = 0
+            while true {
+                let n = archive_read_data(a, &buffer, buffer.count)
+                if n == 0 { return }
+                if n < 0 { throw ArchiveError.unreadable(message(a)) }
+                try out.write(contentsOf: buffer[0..<n])
+                written += Int64(n)
+                if let progress, !progress(written) { throw ArchiveError.cancelled }
+            }
+        }
+        throw ArchiveError.unreadable("Entry “\(entryPath)” not found in archive.")
+    }
+
+    private static func preadBytes(
+        fd: Int32, into buffer: UnsafeMutablePointer<UInt8>, count: Int, offset: off_t
+    ) throws -> Int {
+        var total = 0
+        while total < count {
+            let n = Darwin.pread(fd, buffer.advanced(by: total), count - total, offset + off_t(total))
+            if n > 0 {
+                total += n
+            } else if n == 0 {
+                break
+            } else if errno == EINTR {
+                continue
+            } else {
+                throw ArchiveError.unreadable(String(cString: strerror(errno)))
+            }
+        }
+        return total
+    }
+
+    private static func writeAllFD(fd: Int32, from buffer: UnsafePointer<UInt8>, count: Int) throws {
+        var offset = 0
+        while offset < count {
+            let n = Darwin.write(fd, buffer.advanced(by: offset), count - offset)
+            if n > 0 {
+                offset += n
+            } else if n < 0 && errno == EINTR {
+                continue
+            } else {
+                throw unwritable(errno)
+            }
+        }
     }
 
     /// Tells a decompression bomb from a file that merely compresses well. Ratio alone can't: Deflate

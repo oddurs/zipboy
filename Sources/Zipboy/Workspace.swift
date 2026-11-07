@@ -7,15 +7,39 @@ struct Workspace: Sendable {
     static let base = FileManager.default.temporaryDirectory.appendingPathComponent("Zipboy", isDirectory: true)
 
     let folder: URL
+    let owner: Int32
     var contents: URL { folder.appendingPathComponent("Contents", isDirectory: true) }
-    private var holding: URL { folder.appendingPathComponent("Holding", isDirectory: true) }
+    var holding: URL { folder.appendingPathComponent("Holding", isDirectory: true) }
 
     /// `owner` is the process the workspace belongs to; only tests pass anything but this one.
-    init(in base: URL = Self.base, owner: Int32 = ProcessInfo.processInfo.processIdentifier) throws {
+    /// When `lazy` is true, nothing is written under `base` until `ensureCreated()` is called.
+    init(
+        in base: URL = Self.base,
+        owner: Int32 = ProcessInfo.processInfo.processIdentifier,
+        lazy: Bool = false
+    ) throws {
         folder = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: holding, withIntermediateDirectories: true)
-        try Data(String(owner).utf8).write(to: folder.appendingPathComponent(Self.ownerFile))
+        self.owner = owner
+        if !lazy {
+            try ensureCreated()
+        }
+    }
+
+    var isCreatedOnDisk: Bool {
+        FileManager.default.fileExists(atPath: contents.path)
+    }
+
+    func ensureCreated() throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: contents.path), fm.fileExists(atPath: holding.path) {
+            return
+        }
+        try fm.createDirectory(at: contents, withIntermediateDirectories: true)
+        try fm.createDirectory(at: holding, withIntermediateDirectories: true)
+        let ownerURL = folder.appendingPathComponent(Self.ownerFile)
+        if !fm.fileExists(atPath: ownerURL.path) {
+            try Data(String(owner).utf8).write(to: ownerURL)
+        }
     }
 
     private static let ownerFile = "Owner"
@@ -45,14 +69,21 @@ struct Workspace: Sendable {
 
     /// A fresh place in the holding area for an item called `name`.
     func holdingSpot(for name: String) throws -> URL {
+        try ensureCreated()
         let slot = holding.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: slot, withIntermediateDirectories: true)
         return slot.appendingPathComponent(name)
     }
 
+    /// A holding-area URL for an unmaterialized catalog entry without touching the disk.
+    func virtualHoldingSpot(for name: String) -> URL {
+        holding.appendingPathComponent(UUID().uuidString, isDirectory: true).appendingPathComponent(name)
+    }
+
     /// A copy of the contents as they are now, for saving while editing carries on. On APFS it is a
     /// clone: instant, and taking no space until either side changes.
     func snapshot() throws -> URL {
+        try ensureCreated()
         let copy = folder.appendingPathComponent("Snapshot-\(UUID().uuidString)", isDirectory: true)
         if clonefile(contents.path, copy.path, 0) != 0 {
             try FileManager.default.copyItem(at: contents, to: copy)

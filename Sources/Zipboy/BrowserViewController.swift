@@ -480,7 +480,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     func extract(into folder: URL, items chosen: [Node]? = nil) -> Task<Void, Never>? {
         let items = chosen ?? targets
         let whole = items.isEmpty
-        let urls = whole ? (document?.tree?.children.map(\.url) ?? []) : items.map(\.url)
+        let targetNodes = whole ? (document?.tree?.children ?? []) : items
+        let urls = targetNodes.map(\.url)
+        let paths = targetNodes.map(\.path)
         guard !urls.isEmpty else { return nil }
         let wrap: Bool =
             switch Settings.shared.wrapExtractedFiles {
@@ -492,17 +494,19 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let base = document?.source.map(Naming.stem) ?? "Archive"
         let sourceArchive = document?.source
         guard let document else { return nil }
+        let totalBytes = max(FileCopy.size(of: urls), targetNodes.reduce(Int64(0)) { $0 + $1.size })
         let task = document.beginTask(
             whole
                 ? "Extracting “\(document.displayName ?? "Archive")”…"
                 : urls.count == 1 ? "Extracting “\(urls[0].lastPathComponent)”…" : "Extracting \(urls.count) items…",
-            total: FileCopy.size(of: urls))
+            total: totalBytes)
         let progress = task.progress
         let clone = document.cloneWhenCopying
         return Task.detached { [weak self] in
             defer { Task { @MainActor in document.endTask(task) } }
             var destination = folder
             do {
+                _ = try await document.materialize(paths) { _ in !progress.isCancelled }
                 if wrap {
                     let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
                     destination = folder.appendingPathComponent(Naming.unique(base, isDirectory: true, taken: taken))
@@ -639,8 +643,17 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     /// The default app first, then the rest by name, as in Finder.
     private func openWithMenu(for file: URL) -> NSMenu {
         let menu = NSMenu()
-        let preferred = NSWorkspace.shared.urlForApplication(toOpen: file)
-        let others = NSWorkspace.shared.urlsForApplications(toOpen: file).filter { $0 != preferred }
+        let exists = FileManager.default.fileExists(atPath: file.path)
+        let contentType = UTType(filenameExtension: file.pathExtension) ?? .data
+        let preferred =
+            exists
+            ? NSWorkspace.shared.urlForApplication(toOpen: file)
+            : NSWorkspace.shared.urlForApplication(toOpen: contentType)
+        let allApps =
+            exists
+            ? NSWorkspace.shared.urlsForApplications(toOpen: file)
+            : NSWorkspace.shared.urlsForApplications(toOpen: contentType)
+        let others = allApps.filter { $0 != preferred }
             .sorted { Self.appName($0).localizedStandardCompare(Self.appName($1)) == .orderedAscending }
         for app in [preferred].compactMap({ $0 }) + others {
             let title = app == preferred ? "\(Self.appName(app)) (default)" : Self.appName(app)
@@ -774,14 +787,26 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         return cell
     }
 
+    static func iconForNode(_ node: Node) -> NSImage {
+        if FileManager.default.fileExists(atPath: node.url.path) {
+            return NSWorkspace.shared.icon(forFile: node.url.path)
+        }
+        if node.isDirectory {
+            return NSWorkspace.shared.icon(for: .folder)
+        }
+        let type = UTType(filenameExtension: node.url.pathExtension) ?? .data
+        return NSWorkspace.shared.icon(for: type)
+    }
+
     /// The file's icon now, and for pictures, movies, and PDFs a thumbnail of the content once Quick
     /// Look has made one, as Finder's list shows.
     private func icon(for node: Node) -> NSImage {
         let key = "\(node.url.path)|\(node.modified?.timeIntervalSince1970 ?? 0)"
         if let thumbnail = thumbnails[key] { return thumbnail }
         let url = node.url
+        let exists = FileManager.default.fileExists(atPath: url.path)
         let type = UTType(filenameExtension: url.pathExtension)
-        if !node.isDirectory, let type, [.image, .movie, .pdf].contains(where: type.conforms(to:)),
+        if exists, !node.isDirectory, let type, [.image, .movie, .pdf].contains(where: type.conforms(to:)),
             requested.insert(key).inserted
         {
             let request = QLThumbnailGenerator.Request(
@@ -797,7 +822,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
                 }
             }
         }
-        return NSWorkspace.shared.icon(forFile: url.path)
+        return Self.iconForNode(node)
     }
 
     private func thumbnailArrived(_ image: NSImage, _ key: String, _ url: URL) {
@@ -925,6 +950,8 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         do {
             if FileManager.default.fileExists(atPath: node.url.path) {
                 try FileManager.default.copyItem(at: node.url, to: url)
+            } else if try ArchiveDocument.extractPromisedItem(fromWorkspaceURL: node.url, to: url) {
+                // Extracted directly from the open archive's catalog.
             } else if node.isDirectory {
                 try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             } else {
