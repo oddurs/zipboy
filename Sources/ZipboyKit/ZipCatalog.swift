@@ -75,10 +75,11 @@ public struct ZipCatalog: Equatable, Sendable {
 
         var locatorOffset: UInt64?
         if eocdPos >= 20, readU32(tail, eocdPos - 20) == 0x0706_4b50 {
-            locatorOffset = tailStart + UInt64(eocdPos - 20)
+            let loc = tailStart + UInt64(eocdPos - 20)
+            locatorOffset = loc
             let z64Offset = readU64(tail, eocdPos - 12)
             // Every offset below comes from the file; compare by subtraction so a hostile value can't overflow.
-            guard eocdFileOffset >= 56, z64Offset <= eocdFileOffset - 56 else {
+            guard loc >= 56, z64Offset <= loc - 56 else {
                 throw ArchiveError.unreadable("Zip64 End of Central Directory offset is out of bounds.")
             }
             try handle.seek(toOffset: z64Offset)
@@ -94,13 +95,14 @@ public struct ZipCatalog: Equatable, Sendable {
 
         let cdUpperBound = locatorOffset ?? eocdFileOffset
         guard cdOffset <= cdUpperBound,
-            cdSize <= cdUpperBound - cdOffset
+            cdSize <= cdUpperBound - cdOffset,
+            let cdByteCount = Int(exactly: cdSize)
         else {
             throw ArchiveError.unreadable("Central Directory bounds overlap or exceed the archive size.")
         }
 
         try handle.seek(toOffset: cdOffset)
-        let cdData = (try handle.read(upToCount: Int(cdSize))) ?? Data()
+        let cdData = (try handle.read(upToCount: cdByteCount)) ?? Data()
         guard UInt64(cdData.count) == cdSize else {
             throw ArchiveError.unreadable("Truncated Central Directory.")
         }
@@ -127,103 +129,119 @@ public struct ZipCatalog: Equatable, Sendable {
 
         var rawRecords: [RawRecord] = []
         rawRecords.reserveCapacity(Int(min(totalEntries, 131_072)))
+        var unflaggedNonASCII: [Data] = []
+        var alreadyOrdered = true
         var cursor = 0
         var index = 0
 
-        while cursor < cdData.count {
-            guard cursor + 46 <= cdData.count else {
-                throw ArchiveError.unreadable("Truncated Central Directory entry header.")
-            }
-            guard readU32(cdData, cursor) == 0x0201_4b50 else {
-                throw ArchiveError.unreadable("Invalid Central Directory entry signature.")
-            }
-            let versionMadeBy = readU16(cdData, cursor + 4)
-            let versionNeeded = readU16(cdData, cursor + 6)
-            let flags = readU16(cdData, cursor + 8)
-            let method = readU16(cdData, cursor + 10)
-            let dosTime = readU16(cdData, cursor + 12)
-            let dosDate = readU16(cdData, cursor + 14)
-            let crc = readU32(cdData, cursor + 16)
-            var compSize = UInt64(readU32(cdData, cursor + 20))
-            var uncompSize = UInt64(readU32(cdData, cursor + 24))
-            let nameLen = Int(readU16(cdData, cursor + 28))
-            let extraLen = Int(readU16(cdData, cursor + 30))
-            let entryCommentLen = Int(readU16(cdData, cursor + 32))
-            let internalAttr = readU16(cdData, cursor + 36)
-            let externalAttr = readU32(cdData, cursor + 38)
-            var localOffset = UInt64(readU32(cdData, cursor + 42))
-
-            let headerEnd = cursor + 46 + nameLen + extraLen + entryCommentLen
-            guard headerEnd <= cdData.count else {
-                throw ArchiveError.unreadable("Central Directory entry extends past the directory.")
-            }
-
-            let nameSlice = Data(cdData[(cursor + 46)..<(cursor + 46 + nameLen)])
-            let extraStart = cursor + 46 + nameLen
-            let extraEnd = extraStart + extraLen
-            let extraSlice = Data(cdData[extraStart..<extraEnd])
-            let commentSlice = Data(cdData[extraEnd..<headerEnd])
-
-            var unicodeName: String?
-            var ePos = extraStart
-            while ePos + 4 <= extraEnd {
-                let tag = readU16(cdData, ePos)
-                let size = Int(readU16(cdData, ePos + 2))
-                let fieldEnd = ePos + 4 + size
-                guard fieldEnd <= extraEnd else {
-                    throw ArchiveError.unreadable("Malformed extra field in Central Directory.")
+        try cdData.withUnsafeBytes { rawBuffer in
+            let cdCount = rawBuffer.count
+            while cursor < cdCount {
+                guard cursor + 46 <= cdCount else {
+                    throw ArchiveError.unreadable("Truncated Central Directory entry header.")
                 }
-                if tag == 0x0001 {
-                    var fPos = ePos + 4
-                    if uncompSize == 0xFFFF_FFFF, fPos + 8 <= fieldEnd {
-                        uncompSize = readU64(cdData, fPos)
-                        fPos += 8
-                    }
-                    if compSize == 0xFFFF_FFFF, fPos + 8 <= fieldEnd {
-                        compSize = readU64(cdData, fPos)
-                        fPos += 8
-                    }
-                    if localOffset == 0xFFFF_FFFF, fPos + 8 <= fieldEnd {
-                        localOffset = readU64(cdData, fPos)
-                    }
-                } else if tag == 0x7075, size >= 5 {
-                    let version = cdData[ePos + 4]
-                    if version == 1 {
-                        let extraPathData = Data(cdData[(ePos + 9)..<fieldEnd])
-                        unicodeName = String(data: extraPathData, encoding: .utf8)
-                    }
+                guard loadU32(rawBuffer, cursor) == 0x0201_4b50 else {
+                    throw ArchiveError.unreadable("Invalid Central Directory entry signature.")
                 }
-                ePos = fieldEnd
-            }
+                let versionMadeBy = loadU16(rawBuffer, cursor + 4)
+                let versionNeeded = loadU16(rawBuffer, cursor + 6)
+                let flags = loadU16(rawBuffer, cursor + 8)
+                let method = loadU16(rawBuffer, cursor + 10)
+                let dosTime = loadU16(rawBuffer, cursor + 12)
+                let dosDate = loadU16(rawBuffer, cursor + 14)
+                let crc = loadU32(rawBuffer, cursor + 16)
+                var compSize = UInt64(loadU32(rawBuffer, cursor + 20))
+                var uncompSize = UInt64(loadU32(rawBuffer, cursor + 24))
+                let nameLen = Int(loadU16(rawBuffer, cursor + 28))
+                let extraLen = Int(loadU16(rawBuffer, cursor + 30))
+                let entryCommentLen = Int(loadU16(rawBuffer, cursor + 32))
+                let internalAttr = loadU16(rawBuffer, cursor + 36)
+                let externalAttr = loadU32(rawBuffer, cursor + 38)
+                var localOffset = UInt64(loadU32(rawBuffer, cursor + 42))
 
-            guard cdOffset >= 30, localOffset <= cdOffset - 30,
-                compSize <= cdOffset - 30 - localOffset
-            else {
-                throw ArchiveError.unreadable("Entry local header or payload extends into the Central Directory.")
-            }
+                let extraStart = cursor + 46 + nameLen
+                let extraEnd = extraStart + extraLen
+                let headerEnd = extraEnd + entryCommentLen
+                guard headerEnd <= cdCount else {
+                    throw ArchiveError.unreadable("Central Directory entry extends past the directory.")
+                }
 
-            rawRecords.append(
-                RawRecord(
-                    index: index,
-                    rawName: nameSlice,
-                    unicodeExtraName: unicodeName,
-                    versionMadeBy: versionMadeBy,
-                    versionNeeded: versionNeeded,
-                    flags: flags,
-                    method: method,
-                    dosTime: dosTime,
-                    dosDate: dosDate,
-                    crc32: crc,
-                    compressedSize: compSize,
-                    uncompressedSize: uncompSize,
-                    localHeaderOffset: localOffset,
-                    internalAttributes: internalAttr,
-                    externalAttributes: externalAttr,
-                    extraField: extraSlice,
-                    comment: commentSlice
-                ))
-            index += 1
-            cursor = headerEnd
+                let nameBytes = UnsafeRawBufferPointer(rebasing: rawBuffer[(cursor + 46)..<extraStart])
+                let nameSlice = Data(nameBytes)
+                let extraSlice =
+                    extraLen == 0 ? Data() : Data(UnsafeRawBufferPointer(rebasing: rawBuffer[extraStart..<extraEnd]))
+                let commentSlice =
+                    entryCommentLen == 0
+                    ? Data() : Data(UnsafeRawBufferPointer(rebasing: rawBuffer[extraEnd..<headerEnd]))
+
+                var unicodeName: String?
+                var ePos = extraStart
+                while ePos + 4 <= extraEnd {
+                    let tag = loadU16(rawBuffer, ePos)
+                    let size = Int(loadU16(rawBuffer, ePos + 2))
+                    let fieldEnd = ePos + 4 + size
+                    guard fieldEnd <= extraEnd else {
+                        throw ArchiveError.unreadable("Malformed extra field in Central Directory.")
+                    }
+                    if tag == 0x0001 {
+                        var fPos = ePos + 4
+                        if uncompSize == 0xFFFF_FFFF, fPos + 8 <= fieldEnd {
+                            uncompSize = loadU64(rawBuffer, fPos)
+                            fPos += 8
+                        }
+                        if compSize == 0xFFFF_FFFF, fPos + 8 <= fieldEnd {
+                            compSize = loadU64(rawBuffer, fPos)
+                            fPos += 8
+                        }
+                        if localOffset == 0xFFFF_FFFF, fPos + 8 <= fieldEnd {
+                            localOffset = loadU64(rawBuffer, fPos)
+                        }
+                    } else if tag == 0x7075, size >= 5 {
+                        let version = rawBuffer[ePos + 4]
+                        if version == 1 {
+                            let extraPathBytes = UnsafeRawBufferPointer(rebasing: rawBuffer[(ePos + 9)..<fieldEnd])
+                            unicodeName = String(bytes: extraPathBytes, encoding: .utf8)
+                        }
+                    }
+                    ePos = fieldEnd
+                }
+
+                guard cdOffset >= 30, localOffset <= cdOffset - 30,
+                    compSize <= cdOffset - 30 - localOffset
+                else {
+                    throw ArchiveError.unreadable("Entry local header or payload extends into the Central Directory.")
+                }
+
+                if let prev = rawRecords.last, localOffset < prev.localHeaderOffset {
+                    alreadyOrdered = false
+                }
+                if (flags & (1 << 11)) == 0, unicodeName == nil, nameBytes.contains(where: { $0 >= 0x80 }) {
+                    unflaggedNonASCII.append(nameSlice)
+                }
+
+                rawRecords.append(
+                    RawRecord(
+                        index: index,
+                        rawName: nameSlice,
+                        unicodeExtraName: unicodeName,
+                        versionMadeBy: versionMadeBy,
+                        versionNeeded: versionNeeded,
+                        flags: flags,
+                        method: method,
+                        dosTime: dosTime,
+                        dosDate: dosDate,
+                        crc32: crc,
+                        compressedSize: compSize,
+                        uncompressedSize: uncompSize,
+                        localHeaderOffset: localOffset,
+                        internalAttributes: internalAttr,
+                        externalAttributes: externalAttr,
+                        extraField: extraSlice,
+                        comment: commentSlice
+                    ))
+                index += 1
+                cursor = headerEnd
+            }
         }
 
         guard UInt64(rawRecords.count) == totalEntries else {
@@ -233,7 +251,7 @@ public struct ZipCatalog: Equatable, Sendable {
 
         // Verify that no two entries claim overlapping local header regions. Each record's offset plus
         // compressed size is already bounded by the directory's offset, so these sums can't overflow.
-        let byOffset = rawRecords.sorted { $0.localHeaderOffset < $1.localHeaderOffset }
+        let byOffset = alreadyOrdered ? rawRecords : rawRecords.sorted { $0.localHeaderOffset < $1.localHeaderOffset }
         for i in 0..<byOffset.count where i + 1 < byOffset.count {
             let current = byOffset[i]
             let next = byOffset[i + 1]
@@ -243,14 +261,15 @@ public struct ZipCatalog: Equatable, Sendable {
             }
         }
 
-        let unflaggedSamples = rawRecords.filter { ($0.flags & (1 << 11)) == 0 && $0.unicodeExtraName == nil }
-            .map(\.rawName)
         let resolvedEncoding: TextEncoding =
-            encoding == .auto ? TextEncoding.detect(for: unflaggedSamples) : encoding
+            encoding == .auto
+            ? (unflaggedNonASCII.isEmpty ? .utf8 : TextEncoding.detect(for: unflaggedNonASCII)) : encoding
 
         var entries: [Entry] = []
         var skipped: [String] = []
         entries.reserveCapacity(rawRecords.count)
+        let calendar = Calendar(identifier: .gregorian)
+        var dateCache: [UInt32: Date] = [:]
 
         for record in rawRecords {
             let utf8Flag = (record.flags & (1 << 11)) != 0
@@ -285,7 +304,8 @@ public struct ZipCatalog: Equatable, Sendable {
                     method: record.method,
                     rawDosTime: record.dosTime,
                     rawDosDate: record.dosDate,
-                    modified: dosDate(date: record.dosDate, time: record.dosTime),
+                    modified: dosDate(
+                        date: record.dosDate, time: record.dosTime, calendar: calendar, cache: &dateCache),
                     crc32: record.crc32,
                     compressedSize: record.compressedSize,
                     uncompressedSize: record.uncompressedSize,
@@ -343,8 +363,12 @@ public struct ZipCatalog: Equatable, Sendable {
         return nil
     }
 
-    private static func dosDate(date: UInt16, time: UInt16) -> Date? {
+    private static func dosDate(
+        date: UInt16, time: UInt16, calendar: Calendar, cache: inout [UInt32: Date]
+    ) -> Date? {
         guard date != 0 || time != 0 else { return nil }
+        let key = (UInt32(date) << 16) | UInt32(time)
+        if let cached = cache[key] { return cached }
         var comps = DateComponents()
         comps.year = Int((date >> 9) & 0x7F) + 1980
         comps.month = max(1, Int((date >> 5) & 0x0F))
@@ -352,7 +376,11 @@ public struct ZipCatalog: Equatable, Sendable {
         comps.hour = Int((time >> 11) & 0x1F)
         comps.minute = Int((time >> 5) & 0x3F)
         comps.second = Int((time & 0x1F) * 2)
-        return Calendar(identifier: .gregorian).date(from: comps)
+        if let resolved = calendar.date(from: comps) {
+            cache[key] = resolved
+            return resolved
+        }
+        return nil
     }
 
     /// Converts a `Date` into MS-DOS date and time 16-bit words.
@@ -388,5 +416,17 @@ public struct ZipCatalog: Equatable, Sendable {
         let lo = UInt64(readU32(data, offset))
         let hi = UInt64(readU32(data, offset + 4))
         return lo | (hi << 32)
+    }
+
+    private static func loadU16(_ buffer: UnsafeRawBufferPointer, _ offset: Int) -> UInt16 {
+        buffer.loadUnaligned(fromByteOffset: offset, as: UInt16.self).littleEndian
+    }
+
+    private static func loadU32(_ buffer: UnsafeRawBufferPointer, _ offset: Int) -> UInt32 {
+        buffer.loadUnaligned(fromByteOffset: offset, as: UInt32.self).littleEndian
+    }
+
+    private static func loadU64(_ buffer: UnsafeRawBufferPointer, _ offset: Int) -> UInt64 {
+        buffer.loadUnaligned(fromByteOffset: offset, as: UInt64.self).littleEndian
     }
 }

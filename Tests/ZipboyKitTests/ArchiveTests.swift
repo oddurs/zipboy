@@ -833,6 +833,146 @@ import zlib
             #expect(xattr(attr, on: cleanOut.appendingPathComponent(path)) == nil, "\(path)")
         }
     }
+
+    @Test func catalogHandlesZip64OverFourGigabytesAndOverSixtyFiveThousandEntries() throws {
+        func appendLE<each T: FixedWidthInteger>(_ data: inout Data, _ values: repeat each T) {
+            repeat data.append(contentsOf: Swift.withUnsafeBytes(of: (each values).littleEndian, Array.init))
+        }
+
+        let wide32: UInt32 = 0xFFFF_FFFF
+        let wide16: UInt16 = 0xFFFF
+        let dosDate: UInt16 = (46 << 9) | (11 << 5) | 7
+        let dosTime: UInt16 = (12 << 11)
+
+        // 1. Sparse Zip64 archive over 4 GB with 70,001 entries (> 65,535) and an entry past 4 GiB.
+        let manyZip = dir.appendingPathComponent("zip64-many-and-far.zip")
+        FileManager.default.createFile(atPath: manyZip.path, contents: nil)
+        let writer = try FileHandle(forWritingTo: manyZip)
+
+        let earlyCount = 70_000
+        var localBlob = Data(capacity: earlyCount * 46)
+        var centralBlob = Data(capacity: (earlyCount + 1) * 64)
+
+        for i in 0..<earlyCount {
+            let name = Data("dir/e\(i).txt".utf8)
+            let localOffset = UInt32(localBlob.count)
+            appendLE(&localBlob, UInt32(0x0403_4b50), UInt16(20), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+            appendLE(&localBlob, UInt32(0), UInt32(0), UInt32(0), UInt16(name.count), UInt16(0))
+            localBlob.append(name)
+
+            appendLE(
+                &centralBlob, UInt32(0x0201_4b50), UInt16(0x031E), UInt16(20), UInt16(1 << 11), UInt16(0), dosTime,
+                dosDate)
+            appendLE(&centralBlob, UInt32(0), UInt32(0), UInt32(0), UInt16(name.count), UInt16(0), UInt16(0))
+            appendLE(&centralBlob, UInt16(0), UInt16(0), UInt32(0o100644) << 16, localOffset)
+            centralBlob.append(name)
+        }
+        try writer.write(contentsOf: localBlob)
+
+        let farOffset: UInt64 = 4_500_000_000
+        try writer.seek(toOffset: farOffset)
+        let farName = Data("beyond-4gb.txt".utf8)
+        let farPayload = Data("past-four-gibibytes".utf8)
+        let farTmp = dir.appendingPathComponent("far-crc.bin")
+        try farPayload.write(to: farTmp)
+        let farCRC = try Checksums.compute(for: farTmp).crc32
+
+        var farLocal = Data()
+        appendLE(&farLocal, UInt32(0x0403_4b50), UInt16(45), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+        appendLE(
+            &farLocal, farCRC, UInt32(farPayload.count), UInt32(farPayload.count), UInt16(farName.count), UInt16(0))
+        farLocal.append(farName)
+        farLocal.append(farPayload)
+        try writer.write(contentsOf: farLocal)
+
+        var farExtra = Data()
+        appendLE(&farExtra, UInt16(0x0001), UInt16(8), farOffset)
+        appendLE(
+            &centralBlob, UInt32(0x0201_4b50), UInt16(0x032D), UInt16(45), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+        appendLE(
+            &centralBlob, farCRC, UInt32(farPayload.count), UInt32(farPayload.count), UInt16(farName.count),
+            UInt16(farExtra.count), UInt16(0))
+        appendLE(&centralBlob, UInt16(0), UInt16(0), UInt32(0o100644) << 16, wide32)
+        centralBlob.append(farName)
+        centralBlob.append(farExtra)
+
+        let cdOffset = farOffset + UInt64(farLocal.count)
+        let cdSize = UInt64(centralBlob.count)
+        let totalEntries = UInt64(earlyCount + 1)
+        let z64Offset = cdOffset + cdSize
+        var tailBlob = Data()
+        appendLE(&tailBlob, UInt32(0x0606_4b50), UInt64(44), UInt16(45), UInt16(45), UInt32(0), UInt32(0))
+        appendLE(&tailBlob, totalEntries, totalEntries, cdSize, cdOffset)
+        appendLE(&tailBlob, UInt32(0x0706_4b50), UInt32(0), z64Offset, UInt32(1))
+        appendLE(&tailBlob, UInt32(0x0605_4b50), UInt16(0), UInt16(0), wide16, wide16, wide32, wide32, UInt16(0))
+        try writer.write(contentsOf: centralBlob)
+        try writer.write(contentsOf: tailBlob)
+        try writer.close()
+
+        let catalog = try ZipCatalog.read(from: manyZip)
+        #expect(catalog.entries.count == 70_001)
+        #expect(catalog.centralDirectoryOffset == cdOffset)
+        let beyond = try #require(catalog.entries.last)
+        #expect(beyond.path == "beyond-4gb.txt")
+        #expect(beyond.localHeaderOffset == farOffset)
+        let reader = try FileHandle(forReadingFrom: manyZip)
+        defer { try? reader.close() }
+        let range = try ZipCatalog.payloadRange(in: reader, for: beyond)
+        try reader.seek(toOffset: range.offset)
+        #expect(try reader.read(upToCount: Int(range.length)) == farPayload)
+
+        // 2. Sparse Zip64 archive with a single stored entry whose compressed & uncompressed sizes exceed 4 GiB.
+        let hugeZip = dir.appendingPathComponent("zip64-huge-entry.zip")
+        FileManager.default.createFile(atPath: hugeZip.path, contents: nil)
+        let hugeWriter = try FileHandle(forWritingTo: hugeZip)
+        let hugeSize: UInt64 = 4_500_000_000
+        let hugeName = Data("huge.bin".utf8)
+        var hugeLocalExtra = Data()
+        appendLE(&hugeLocalExtra, UInt16(0x0001), UInt16(16), hugeSize, hugeSize)
+        var hugeLocal = Data()
+        appendLE(&hugeLocal, UInt32(0x0403_4b50), UInt16(45), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+        appendLE(&hugeLocal, UInt32(0), wide32, wide32, UInt16(hugeName.count), UInt16(hugeLocalExtra.count))
+        hugeLocal.append(hugeName)
+        hugeLocal.append(hugeLocalExtra)
+        try hugeWriter.write(contentsOf: hugeLocal)
+
+        let hugePayloadStart = UInt64(hugeLocal.count)
+        let hugeCDOffset = hugePayloadStart + hugeSize
+        try hugeWriter.seek(toOffset: hugeCDOffset)
+
+        var hugeCD = Data()
+        appendLE(
+            &hugeCD, UInt32(0x0201_4b50), UInt16(0x032D), UInt16(45), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+        appendLE(
+            &hugeCD, UInt32(0), wide32, wide32, UInt16(hugeName.count), UInt16(hugeLocalExtra.count), UInt16(0))
+        appendLE(&hugeCD, UInt16(0), UInt16(0), UInt32(0o100644) << 16, UInt32(0))
+        hugeCD.append(hugeName)
+        hugeCD.append(hugeLocalExtra)
+
+        let hugeCDSize = UInt64(hugeCD.count)
+        let hugeZ64Offset = hugeCDOffset + hugeCDSize
+        var hugeTail = Data()
+        appendLE(&hugeTail, UInt32(0x0606_4b50), UInt64(44), UInt16(45), UInt16(45), UInt32(0), UInt32(0))
+        appendLE(&hugeTail, UInt64(1), UInt64(1), hugeCDSize, hugeCDOffset)
+        appendLE(&hugeTail, UInt32(0x0706_4b50), UInt32(0), hugeZ64Offset, UInt32(1))
+        appendLE(
+            &hugeTail, UInt32(0x0605_4b50), UInt16(0), UInt16(0), UInt16(1), UInt16(1), UInt32(hugeCDSize), wide32,
+            UInt16(0))
+        try hugeWriter.write(contentsOf: hugeCD)
+        try hugeWriter.write(contentsOf: hugeTail)
+        try hugeWriter.close()
+
+        let hugeCatalog = try ZipCatalog.read(from: hugeZip)
+        let hugeEntry = try #require(hugeCatalog.entries.first)
+        #expect(hugeEntry.path == "huge.bin")
+        #expect(hugeEntry.uncompressedSize == hugeSize)
+        #expect(hugeEntry.compressedSize == hugeSize)
+        let hugeReader = try FileHandle(forReadingFrom: hugeZip)
+        defer { try? hugeReader.close() }
+        let hugeRange = try ZipCatalog.payloadRange(in: hugeReader, for: hugeEntry)
+        #expect(hugeRange.offset == hugePayloadStart)
+        #expect(hugeRange.length == hugeSize)
+    }
 }
 
 @Suite struct NodeTests {
