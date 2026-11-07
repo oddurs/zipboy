@@ -738,6 +738,7 @@ final class ArchiveDocument: NSDocument {
         guard let targetURL, let freshCatalog = try? ZipCatalog.read(from: targetURL, encoding: encoding) else {
             return
         }
+        try? materializeHeldSynchronously()
         try? sourceHandle?.close()
         sourceHandle = try? FileHandle(forReadingFrom: targetURL)
         recordProvenance(catalog: freshCatalog, sourceURL: targetURL) { identities[$0] }
@@ -989,6 +990,21 @@ final class ArchiveDocument: NSDocument {
         return results
     }
 
+    func isMaterializing(_ path: String) -> Bool {
+        materializingByPath[path] != nil
+    }
+
+    private func finishMaterializing(path: String, entry: ZipCatalog.Entry, url: URL) {
+        materializingByPath.removeValue(forKey: path)
+        if unmaterialized[path]?.localHeaderOffset == entry.localHeaderOffset {
+            unmaterialized.removeValue(forKey: path)
+        }
+        if !entry.isDirectory && !entry.isSymlink, let id = FileIdentity.of(url) {
+            trackedByInode[id.inode] = TrackedFile(entry: entry, identity: id)
+        }
+        signature = Self.signature(of: tree)
+    }
+
     private func materializeSingleEntry(
         _ path: String,
         progress: (@Sendable (Int64) -> Bool)?
@@ -1013,7 +1029,7 @@ final class ArchiveDocument: NSDocument {
         let quarantine = sourceQuarantine
         let chosenEncoding = encoding
 
-        let task = Task.detached { () throws -> URL in
+        let task = Task.detached(priority: .userInitiated) { [weak self] () throws -> URL in
             try Archive.extractEntry(
                 entry,
                 from: srcURL,
@@ -1024,24 +1040,107 @@ final class ArchiveDocument: NSDocument {
                 encoding: chosenEncoding,
                 progress: progress
             )
+            await MainActor.run {
+                self?.finishMaterializing(path: path, entry: entry, url: destURL)
+            }
             return destURL
         }
         materializingByPath[path] = task
         do {
-            let url = try await task.value
-            materializingByPath.removeValue(forKey: path)
-            if unmaterialized[path]?.localHeaderOffset == entry.localHeaderOffset {
-                unmaterialized.removeValue(forKey: path)
-            }
-            if !entry.isDirectory && !entry.isSymlink, let id = FileIdentity.of(url) {
-                trackedByInode[id.inode] = TrackedFile(entry: entry, identity: id)
-            }
-            signature = Self.signature(of: tree)
-            return url
+            return try await task.value
         } catch {
             materializingByPath.removeValue(forKey: path)
             throw error
         }
+    }
+
+    @discardableResult
+    func materializeSynchronously(_ paths: [String]) throws -> [URL] {
+        guard let workspace else { throw CocoaError(.fileReadUnknown) }
+        var results: [URL] = []
+        results.reserveCapacity(paths.count)
+        let fm = FileManager.default
+
+        for rawPath in paths {
+            let clean = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !clean.isEmpty else {
+                try workspace.ensureCreated()
+                ensureWatcherRunning()
+                results.append(workspace.contents)
+                continue
+            }
+
+            let prefix = clean + "/"
+            let childEntries = unmaterialized.keys.filter { $0.hasPrefix(prefix) }.sorted()
+            let childFolders = unmaterializedFolders.keys.filter { $0 == clean || $0.hasPrefix(prefix) }.sorted()
+
+            if !childFolders.isEmpty || !childEntries.isEmpty {
+                try workspace.ensureCreated()
+                ensureWatcherRunning()
+                for folder in childFolders {
+                    let folderURL = workspace.url(folder)
+                    if !fm.fileExists(atPath: folderURL.path) {
+                        try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
+                        if let mod = unmaterializedFolders[folder] ?? nil {
+                            try? fm.setAttributes([.modificationDate: mod], ofItemAtPath: folderURL.path)
+                        }
+                        if let mark = sourceQuarantine {
+                            Archive.setQuarantine(mark, on: folderURL)
+                        }
+                    }
+                }
+                for childPath in childEntries {
+                    _ = try materializeSingleEntrySynchronously(childPath)
+                }
+                if unmaterialized[clean] != nil {
+                    _ = try materializeSingleEntrySynchronously(clean)
+                }
+                signature = Self.signature(of: tree)
+                results.append(workspace.url(clean))
+            } else if unmaterialized[clean] != nil {
+                let url = try materializeSingleEntrySynchronously(clean)
+                results.append(url)
+            } else {
+                results.append(workspace.url(clean))
+            }
+        }
+        return results
+    }
+
+    func materializeURLSynchronously(_ url: URL) throws {
+        guard let workspace, let relPath = relativeArchivePath(of: url, in: workspace) else { return }
+        _ = try materializeSynchronously([relPath])
+    }
+
+    private func materializeSingleEntrySynchronously(_ path: String) throws -> URL {
+        guard let workspace else { throw CocoaError(.fileReadUnknown) }
+        let inFlight = materializingByPath.removeValue(forKey: path)
+        inFlight?.cancel()
+        guard let entry = unmaterialized[path] else {
+            return workspace.url(path)
+        }
+        guard let srcURL = source ?? sourceSignature?.url else {
+            throw ArchiveError.unreadable("Missing source archive.")
+        }
+        try workspace.ensureCreated()
+        ensureWatcherRunning()
+        let destURL = workspace.url(path)
+        if !FileManager.default.fileExists(atPath: destURL.path) {
+            if inFlight == nil {
+                materializationCounts[path, default: 0] += 1
+            }
+            try Archive.extractEntry(
+                entry,
+                from: srcURL,
+                sourceHandle: sourceHandle,
+                to: destURL,
+                quarantineRoot: workspace.contents,
+                quarantineMark: sourceQuarantine,
+                encoding: encoding
+            )
+        }
+        finishMaterializing(path: path, entry: entry, url: destURL)
+        return destURL
     }
 
     func materializeAllSynchronously() throws {
