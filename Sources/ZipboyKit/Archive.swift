@@ -1,4 +1,5 @@
 import CArchive
+import Darwin
 import Foundation
 
 public enum ArchiveError: LocalizedError, Equatable {
@@ -494,11 +495,53 @@ public enum Archive {
                 throw ArchiveError.unreadable(error.localizedDescription)
             }
         }
+        if let mark = quarantine(of: archive) {
+            stampQuarantine(mark, under: root)
+        }
         // Last, because writing a folder's contents moves its date.
         for (url, date) in folders.reversed() {
             try? fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
         }
         return summary
+    }
+
+    public static let quarantineAttribute = "com.apple.quarantine"
+
+    /// Reads the `com.apple.quarantine` extended attribute on `url` without following symlinks.
+    public static func quarantine(of url: URL) -> Data? {
+        let length = getxattr(url.path, quarantineAttribute, nil, 0, 0, XATTR_NOFOLLOW)
+        guard length >= 0 else { return nil }
+        if length == 0 { return Data() }
+        var data = Data(count: length)
+        let read = data.withUnsafeMutableBytes {
+            getxattr(url.path, quarantineAttribute, $0.baseAddress, length, 0, XATTR_NOFOLLOW)
+        }
+        guard read >= 0 else { return nil }
+        return Data(data.prefix(read))
+    }
+
+    /// Copies `com.apple.quarantine` from `source` onto `destination` when `source` carries it.
+    public static func copyQuarantine(from source: URL, to destination: URL) {
+        guard let mark = quarantine(of: source) else { return }
+        setQuarantine(mark, on: destination)
+    }
+
+    private static func setQuarantine(_ mark: Data, on url: URL) {
+        _ = mark.withUnsafeBytes {
+            setxattr(url.path, quarantineAttribute, $0.baseAddress, mark.count, 0, XATTR_NOFOLLOW)
+        }
+    }
+
+    private static func stampQuarantine(_ mark: Data, under root: URL) {
+        func walk(_ dir: URL) {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            for name in names {
+                let item = dir.appendingPathComponent(name)
+                setQuarantine(mark, on: item)
+                if isDirectory(item) { walk(item) }
+            }
+        }
+        walk(root)
     }
 
     /// Tells a decompression bomb from a file that merely compresses well. Ratio alone can't: Deflate

@@ -4,13 +4,9 @@
 
 ## v0.1 — First release
 
-`##########` 90% · 19 of 21 done · due 2026-11-20
+`##########` 95% · 20 of 21 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
-
-### backlog
-
-- [ ] `0090` Extracted files keep the quarantine mark of the archive they came from <sup>bug · p0 · archive</sup>
 
 ### blocked
 
@@ -37,6 +33,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 - [x] `0076` Polish every surface of the app until nothing looks unconsidered <sup>feature · p2 · shell</sup>
 - [x] `0077` Drop the neon theme for the stock Mac look and tighten every interaction <sup>feature · p2 · shell</sup>
 - [x] `0089` Mugi: the V05 icon, an About window, and a quick welcome <sup>feature · p1 · shell</sup>
+- [x] `0090` Extracted files keep the quarantine mark of the archive they came from <sup>bug · p0 · archive</sup>
 
 ## v0.2 — Saves in seconds
 

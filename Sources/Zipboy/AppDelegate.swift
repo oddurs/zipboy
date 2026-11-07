@@ -205,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let folderName = Naming.unique(Naming.stem(of: archive), isDirectory: true, taken: taken)
                 targetFolder = folder.appendingPathComponent(folderName)
                 try FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: false)
+                Archive.copyQuarantine(from: archive, to: targetFolder)
             }
             var taken = Set((try? FileManager.default.contentsOfDirectory(atPath: targetFolder.path)) ?? [])
             var moved: [URL] = []
