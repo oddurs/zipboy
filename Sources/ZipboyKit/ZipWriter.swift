@@ -31,7 +31,7 @@ public enum ZipWriter {
         let comment: Data
     }
 
-    private static let chunkSize = 256 * 1024
+    private static let chunkSize = 1024 * 1024
 
     /// Writes `items` to `destination` atomically, reading `.verbatim` items from `sourceZip`.
     public static func write(
@@ -64,13 +64,15 @@ public enum ZipWriter {
         defer { try? sourceHandle?.close() }
 
         let totalWork: Int64 = items.reduce(0) { sum, item in
-            switch item {
-            case .verbatim(let entry, _):
-                return sum + Int64(entry.compressedSize)
-            case .workspace(let url, _):
-                let size = (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-                return sum + max(0, size)
-            }
+            let delta: Int64 =
+                switch item {
+                case .verbatim(let entry, _):
+                    Int64(clamping: entry.compressedSize)
+                case .workspace(let url, _):
+                    max(0, (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0)
+                }
+            let (next, overflow) = sum.addingReportingOverflow(delta)
+            return overflow ? .max : next
         }
         var completedWork: Int64 = 0
         func report(_ delta: Int64) throws {
@@ -141,7 +143,7 @@ public enum ZipWriter {
             // Zip64 End of Central Directory Record (56 bytes)
             appendU32(0x0606_4b50, to: &trailer)
             appendU64(44, to: &trailer)  // size of remaining record
-            appendU16(0x031E, to: &trailer)  // version made by (Unix, 3.0)
+            appendU16(0x032D, to: &trailer)  // version made by (Unix, 4.5)
             appendU16(45, to: &trailer)  // version needed (4.5 for Zip64)
             appendU32(0, to: &trailer)  // disk number
             appendU32(0, to: &trailer)  // disk with central directory
@@ -430,9 +432,12 @@ public enum ZipWriter {
         }
 
         let declaredSize = UInt64((attrs[.size] as? Int64) ?? 0)
-        let wantsDeflate = ZipMethod.forFile(named: url.lastPathComponent) == .deflate && declaredSize > 0
+        let targetName = (path as NSString).lastPathComponent
+        let methodName = targetName.isEmpty ? url.lastPathComponent : targetName
+        let wantsDeflate = ZipMethod.forFile(named: methodName) == .deflate && declaredSize > 0
         let method: UInt16 = wantsDeflate ? 8 : 0
-        let needsZ64 = declaredSize >= 0xFFFF_FFFF
+        // Deflate block headers add up to ~0.04% on incompressible data, so reserve Zip64 near 4 GiB too.
+        let needsZ64 = declaredSize >= 0xFFFF_FFFF || (wantsDeflate && declaredSize >= 0xFFEF_0000)
         let versionNeeded: UInt16 = needsZ64 ? 45 : 20
 
         var localExtra = Data()
@@ -469,17 +474,30 @@ public enum ZipWriter {
         let input = try FileHandle(forReadingFrom: url)
         defer { try? input.close() }
 
+        let inFD = input.fileDescriptor
+        let outFD = out.fileDescriptor
+
         if method == 0 {
-            while let data = try input.read(upToCount: chunkSize), !data.isEmpty {
-                data.withUnsafeBytes { raw in
-                    if let base = raw.bindMemory(to: Bytef.self).baseAddress {
-                        crc = zlib.crc32(crc, base, uInt(raw.count))
+            var buf = [UInt8](repeating: 0, count: chunkSize)
+            while true {
+                let n = try buf.withUnsafeMutableBufferPointer { raw in
+                    guard let base = raw.baseAddress else { return 0 }
+                    return try readChunk(fd: inFD, into: base, count: raw.count)
+                }
+                if n == 0 { break }
+                buf.withUnsafeBufferPointer { raw in
+                    if let base = raw.baseAddress {
+                        crc = zlib.crc32(crc, base, uInt(n))
                     }
                 }
-                try out.write(contentsOf: data)
-                uncompTotal += UInt64(data.count)
-                compTotal += UInt64(data.count)
-                try report(Int64(data.count))
+                try buf.withUnsafeBufferPointer { raw in
+                    if let base = raw.baseAddress {
+                        try writeAll(fd: outFD, from: base, count: n)
+                    }
+                }
+                uncompTotal += UInt64(n)
+                compTotal += UInt64(n)
+                try report(Int64(n))
             }
         } else {
             var stream = z_stream()
@@ -498,23 +516,26 @@ public enum ZipWriter {
             }
             defer { deflateEnd(&stream) }
 
+            var inBuf = [UInt8](repeating: 0, count: chunkSize)
             var outBuf = [UInt8](repeating: 0, count: chunkSize)
             while true {
-                let data = (try input.read(upToCount: chunkSize)) ?? Data()
-                let isEOF = data.isEmpty
+                let readCount = try inBuf.withUnsafeMutableBufferPointer { raw in
+                    guard let base = raw.baseAddress else { return 0 }
+                    return try readChunk(fd: inFD, into: base, count: raw.count)
+                }
+                let isEOF = readCount == 0
                 if !isEOF {
-                    data.withUnsafeBytes { raw in
-                        if let base = raw.bindMemory(to: Bytef.self).baseAddress {
-                            crc = zlib.crc32(crc, base, uInt(raw.count))
+                    inBuf.withUnsafeBufferPointer { raw in
+                        if let base = raw.baseAddress {
+                            crc = zlib.crc32(crc, base, uInt(readCount))
                         }
                     }
-                    uncompTotal += UInt64(data.count)
+                    uncompTotal += UInt64(readCount)
                 }
 
-                try data.withUnsafeBytes { rawIn in
-                    stream.next_in = UnsafeMutablePointer<Bytef>(
-                        mutating: rawIn.bindMemory(to: Bytef.self).baseAddress)
-                    stream.avail_in = uInt(rawIn.count)
+                try inBuf.withUnsafeMutableBufferPointer { rawIn in
+                    stream.next_in = rawIn.baseAddress
+                    stream.avail_in = uInt(readCount)
                     let flush = isEOF ? Z_FINISH : Z_NO_FLUSH
                     repeat {
                         let writtenChunk: Int = try outBuf.withUnsafeMutableBufferPointer { rawOut in
@@ -527,14 +548,18 @@ public enum ZipWriter {
                             return rawOut.count - Int(stream.avail_out)
                         }
                         if writtenChunk > 0 {
-                            try out.write(contentsOf: outBuf[0..<writtenChunk])
+                            try outBuf.withUnsafeBufferPointer { rawOut in
+                                if let base = rawOut.baseAddress {
+                                    try writeAll(fd: outFD, from: base, count: writtenChunk)
+                                }
+                            }
                             compTotal += UInt64(writtenChunk)
                         }
                     } while stream.avail_out == 0
                 }
 
                 if !isEOF {
-                    try report(Int64(data.count))
+                    try report(Int64(readCount))
                 } else {
                     break
                 }
@@ -588,21 +613,69 @@ public enum ZipWriter {
         reportPayloadOnlyFrom payloadStartDelta: UInt64,
         report: (Int64) throws -> Void
     ) throws {
-        try source.seek(toOffset: offset)
+        guard length > 0 else { return }
+        let inFD = source.fileDescriptor
+        let outFD = destination.fileDescriptor
+        var buf = [UInt8](repeating: 0, count: Int(min(UInt64(chunkSize), length)))
         var remaining = length
         var copied: UInt64 = 0
         while remaining > 0 {
-            let step = Int(min(UInt64(chunkSize), remaining))
-            guard let data = try source.read(upToCount: step), !data.isEmpty else {
+            let step = Int(min(UInt64(buf.count), remaining))
+            guard let pos = off_t(exactly: offset + copied) else {
+                throw ArchiveError.unreadable("ZIP entry offset exceeds supported file size.")
+            }
+            let n = try buf.withUnsafeMutableBufferPointer { raw -> Int in
+                guard let base = raw.baseAddress else { return 0 }
+                return try preadChunk(fd: inFD, into: base, count: step, offset: pos)
+            }
+            guard n > 0 else {
                 throw ArchiveError.unreadable("Unexpected end of file while copying ZIP entry.")
             }
-            try destination.write(contentsOf: data)
+            try buf.withUnsafeBufferPointer { raw in
+                if let base = raw.baseAddress {
+                    try writeAll(fd: outFD, from: base, count: n)
+                }
+            }
             let prev = copied
-            copied += UInt64(data.count)
-            remaining -= UInt64(data.count)
+            copied += UInt64(n)
+            remaining -= UInt64(n)
             if copied > payloadStartDelta {
                 let effectiveStart = max(prev, payloadStartDelta)
                 try report(Int64(copied - effectiveStart))
+            }
+        }
+    }
+
+    private static func readChunk(fd: Int32, into buffer: UnsafeMutablePointer<UInt8>, count: Int) throws -> Int {
+        while true {
+            let n = Darwin.read(fd, buffer, count)
+            if n >= 0 { return n }
+            if errno == EINTR { continue }
+            throw ArchiveError.unreadable("Failed reading workspace file (\(String(cString: strerror(errno)))).")
+        }
+    }
+
+    private static func preadChunk(
+        fd: Int32, into buffer: UnsafeMutablePointer<UInt8>, count: Int, offset: off_t
+    ) throws -> Int {
+        while true {
+            let n = Darwin.pread(fd, buffer, count, offset)
+            if n >= 0 { return n }
+            if errno == EINTR { continue }
+            throw ArchiveError.unreadable("Failed reading source archive (\(String(cString: strerror(errno)))).")
+        }
+    }
+
+    private static func writeAll(fd: Int32, from buffer: UnsafePointer<UInt8>, count: Int) throws {
+        var offset = 0
+        while offset < count {
+            let n = Darwin.write(fd, buffer.advanced(by: offset), count - offset)
+            if n > 0 {
+                offset += n
+            } else if n < 0 && errno == EINTR {
+                continue
+            } else {
+                throw ArchiveError.unwritable("Failed writing archive (\(String(cString: strerror(errno)))).")
             }
         }
     }
