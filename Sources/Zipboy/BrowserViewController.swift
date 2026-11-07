@@ -938,19 +938,30 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: Dragging out
 
+    private let filePromiseQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
+
+    nonisolated(unsafe) var onPromiseProgress: (@Sendable (Progress, Int64) -> Void)?
+
     func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
         guard let node = item as? Node else { return nil }
-        if FileManager.default.fileExists(atPath: node.url.path) {
+        if document?.hasUnmaterializedItems(under: node.path) != true,
+            FileManager.default.fileExists(atPath: node.url.path)
+        {
             return node.url as NSURL
         }
         return filePromiseProvider(for: node)
     }
 
     func filePromiseProvider(for node: Node) -> NSFilePromiseProvider {
+        let ext = (node.name as NSString).pathExtension
         let type: UTType =
             node.isDirectory
             ? .folder
-            : (UTType(filenameExtension: node.url.pathExtension) ?? .data)
+            : (!ext.isEmpty ? (UTType(filenameExtension: ext) ?? .data) : .data)
         let provider = NSFilePromiseProvider(fileType: type.identifier, delegate: self)
         provider.userInfo = node
         return provider
@@ -961,7 +972,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     nonisolated func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue {
-        OperationQueue()
+        filePromiseQueue
     }
 
     nonisolated func filePromiseProvider(
@@ -972,18 +983,43 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             completionHandler(nil)
             return
         }
+        let progress = Progress(totalUnitCount: max(node.size, 1))
+        progress.kind = .file
+        progress.fileOperationKind = .copying
+        progress.fileURL = url
+        progress.isCancellable = true
+        progress.publish()
+        defer { progress.unpublish() }
+
+        let hook = onPromiseProgress
+        let reportProgress: @Sendable (Int64) -> Bool = { bytes in
+            progress.completedUnitCount = min(bytes, progress.totalUnitCount)
+            hook?(progress, bytes)
+            return !progress.isCancelled
+        }
+
         do {
-            if FileManager.default.fileExists(atPath: node.url.path) {
-                try FileManager.default.copyItem(at: node.url, to: url)
-            } else if try ArchiveDocument.extractPromisedItem(fromWorkspaceURL: node.url, to: url) {
-                // Extracted directly from the open archive's catalog.
+            if try ArchiveDocument.extractPromisedItem(
+                fromWorkspaceURL: node.url, to: url, progress: reportProgress
+            ) {
+                progress.completedUnitCount = progress.totalUnitCount
+                hook?(progress, node.size)
+            } else if FileManager.default.fileExists(atPath: node.url.path) {
+                try FileCopy.copy(node.url, to: url, progress: reportProgress)
+                progress.completedUnitCount = progress.totalUnitCount
+                hook?(progress, node.size)
             } else if node.isDirectory {
                 try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                progress.completedUnitCount = progress.totalUnitCount
+                hook?(progress, node.size)
             } else {
                 try Data().write(to: url)
+                progress.completedUnitCount = progress.totalUnitCount
+                hook?(progress, node.size)
             }
             completionHandler(nil)
         } catch {
+            try? FileManager.default.removeItem(at: url)
             completionHandler(error)
         }
     }

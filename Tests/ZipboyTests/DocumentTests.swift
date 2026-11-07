@@ -1218,4 +1218,103 @@ final class RecordingNotifier: Notifier {
             #expect(doc.verbatimEntry(forPath: path) != nil, "\(path)")
         }
     }
+
+    @Test func filePromiseDragOutFulfillsFilesFoldersAttachmentsAndPublishesFinderProgress() async throws {
+        let fm = FileManager.default
+        let src = dir.appendingPathComponent("promise-src")
+        try fm.createDirectory(
+            at: src.appendingPathComponent("bundle/sub"), withIntermediateDirectories: true)
+        let noteBody = Data("attachment-for-mail-and-messages".utf8)
+        let bundleA = Data("bundle-alpha".utf8)
+        let bundleB = Data("bundle-bravo-nested".utf8)
+        let largePayload = Data(repeating: 0x5A, count: 4 << 20)
+        try noteBody.write(to: src.appendingPathComponent("note.txt"))
+        try bundleA.write(to: src.appendingPathComponent("bundle/a.txt"))
+        try bundleB.write(to: src.appendingPathComponent("bundle/sub/b.txt"))
+        try largePayload.write(to: src.appendingPathComponent("large.bin"))
+
+        let zip = dir.appendingPathComponent("Promises.zip")
+        try Archive.writeZip(from: src, to: zip)
+
+        let (doc, browser) = try await open(zip)
+        defer { doc.close() }
+        let ws = try #require(doc.workspace)
+        #expect(!ws.isCreatedOnDisk)
+
+        // 1. Unmaterialized file drags as NSFilePromiseProvider with UTType & filename for Mail/Messages.
+        let noteNode = try #require(doc.tree?.find("note.txt"))
+        let noteWriter = try #require(browser.outlineView(NSOutlineView(), pasteboardWriterForItem: noteNode))
+        let notePromise = try #require(noteWriter as? NSFilePromiseProvider)
+        #expect(notePromise.fileType == "public.plain-text")
+        #expect(browser.filePromiseProvider(notePromise, fileNameForType: notePromise.fileType) == "note.txt")
+        #expect(browser.operationQueue(for: notePromise).qualityOfService == .userInitiated)
+
+        let outDir = dir.appendingPathComponent("promise-out")
+        try fm.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let noteDest = outDir.appendingPathComponent("note.txt")
+        var noteErr: Error?
+        browser.filePromiseProvider(notePromise, writePromiseTo: noteDest) { noteErr = $0 }
+        #expect(noteErr == nil)
+        #expect(try Data(contentsOf: noteDest) == noteBody)
+
+        // Materializing note.txt makes subsequent drags return a plain NSURL directly.
+        _ = try await doc.materialize(["note.txt"])
+        let materializedWriter = browser.outlineView(NSOutlineView(), pasteboardWriterForItem: noteNode)
+        #expect((materializedWriter as? NSURL) as URL? == ws.url("note.txt"))
+
+        // 2. A folder (even partially materialized) drags via file promise and arrives whole.
+        _ = try await doc.materialize(["bundle/a.txt"])
+        #expect(fm.fileExists(atPath: ws.url("bundle/a.txt").path))
+        #expect(!fm.fileExists(atPath: ws.url("bundle/sub/b.txt").path))
+
+        let bundleNode = try #require(doc.tree?.find("bundle"))
+        let bundleWriter = try #require(browser.outlineView(NSOutlineView(), pasteboardWriterForItem: bundleNode))
+        let bundlePromise = try #require(bundleWriter as? NSFilePromiseProvider)
+        let bundleDest = outDir.appendingPathComponent("bundle")
+        var bundleErr: Error?
+        browser.filePromiseProvider(bundlePromise, writePromiseTo: bundleDest) { bundleErr = $0 }
+        #expect(bundleErr == nil)
+        #expect(try Data(contentsOf: bundleDest.appendingPathComponent("a.txt")) == bundleA)
+        #expect(try Data(contentsOf: bundleDest.appendingPathComponent("sub/b.txt")) == bundleB)
+
+        // Once the entire folder is materialized, dragging it returns its folder URL directly.
+        _ = try await doc.materialize(["bundle"])
+        let fullBundleWriter = browser.outlineView(NSOutlineView(), pasteboardWriterForItem: bundleNode)
+        #expect((fullBundleWriter as? NSURL) as URL? == ws.url("bundle"))
+
+        // 3. Large entry drag-out publishes Finder Progress (.file, .copying, fileURL) and reports byte steps.
+        let largeNode = try #require(doc.tree?.find("large.bin"))
+        let largePromise = try #require(
+            browser.outlineView(NSOutlineView(), pasteboardWriterForItem: largeNode) as? NSFilePromiseProvider)
+        let largeDest = outDir.appendingPathComponent("large.bin")
+
+        let observedSteps = Locked<[Int64]>([])
+        let observedMeta = Locked<(kind: ProgressKind?, op: Progress.FileOperationKind?, url: URL?, total: Int64)?>(
+            nil)
+        browser.onPromiseProgress = { progress, bytes in
+            var list = observedSteps.value
+            list.append(bytes)
+            observedSteps.value = list
+            observedMeta.value = (
+                progress.kind,
+                progress.fileOperationKind,
+                progress.fileURL,
+                progress.totalUnitCount
+            )
+        }
+        defer { browser.onPromiseProgress = nil }
+
+        var largeErr: Error?
+        browser.filePromiseProvider(largePromise, writePromiseTo: largeDest) { largeErr = $0 }
+        #expect(largeErr == nil)
+        #expect(try Data(contentsOf: largeDest) == largePayload)
+
+        let meta = try #require(observedMeta.value)
+        #expect(meta.kind == .file)
+        #expect(meta.op == .copying)
+        #expect(meta.url == largeDest)
+        #expect(meta.total == Int64(largePayload.count))
+        #expect(observedSteps.value.count > 1)
+        #expect(observedSteps.value.last == Int64(largePayload.count))
+    }
 }
