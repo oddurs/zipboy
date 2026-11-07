@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
 
-# The performance budgets: each measurement printed beside its budget, in a release build.
-# Exits non-zero if any is more than 20% over. Kept out of the test suite, where a busy machine
-# failed them for reasons that weren't bugs.
+# The performance budgets: each measurement printed beside its budget (from scripts/budgets.json),
+# in a release build. Exits non-zero if any is more than 20% over. Kept out of the test suite,
+# where a busy machine failed them for reasons that weren't bugs.
 
 cd "$(dirname "$0")/.."
 
-echo "==> measuring against the budgets, in a release build"
-swift run -c release ZipboyBench
+echo "==> measuring against scripts/budgets.json, in a release build"
+swift run -c release ZipboyBench "$@"

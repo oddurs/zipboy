@@ -292,4 +292,65 @@ import ZipboyKit
         #expect(task.contains("Set :CFBundleVersion $build_num"))
         #expect(try Self.source("AboutWindowController.swift").contains(#""Version \(short) (\(build))""#))
     }
+
+    @Test func benchPrintsMeasurementsExitsOverBudgetAndHasNightlyWorkflow() throws {
+        let fm = FileManager.default
+        let budgetsURL = Self.root.appendingPathComponent("scripts/budgets.json")
+        let budgetsRaw = try Data(contentsOf: budgetsURL)
+        let entries = try #require(try JSONSerialization.jsonObject(with: budgetsRaw) as? [[String: Any]])
+        let ids = Set(entries.compactMap { $0["id"] as? String })
+        #expect(
+            ids.isSuperset(of: [
+                "open_5gb", "list_5gb", "list_100k", "delta_save_5gb", "full_save_5gb", "checksums_8mb",
+                "quicklook_10k",
+            ]))
+
+        let benchBin = Bundle(for: ArchiveDocument.self).bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("ZipboyBench")
+        #expect(fm.isExecutableFile(atPath: benchBin.path))
+
+        func runBench(_ args: [String]) throws -> (Int32, String) {
+            let p = Process()
+            p.executableURL = benchBin
+            p.currentDirectoryURL = Self.root
+            p.arguments = args
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = pipe
+            try p.run()
+            p.waitUntilExit()
+            let text = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            return (p.terminationStatus, text)
+        }
+
+        let (selfStatus, selfOut) = try runBench(["--self-test"])
+        #expect(selfStatus == 0, "\(selfOut)")
+        #expect(selfOut.contains("self-test ok"))
+
+        let (passStatus, passOut) = try runBench(["--only", "checksums_8mb"])
+        #expect(passStatus == 0, "\(passOut)")
+        #expect(passOut.contains("CRC-32 and SHA-256 of 8 MB"))
+        #expect(passOut.contains("budget    300 ms  ok"))
+
+        let tmp = fm.temporaryDirectory.appendingPathComponent("bench-over-\(UUID().uuidString).json")
+        defer { try? fm.removeItem(at: tmp) }
+        try Data(
+            """
+            [{"id": "checksums_8mb", "name": "CRC-32 and SHA-256 of 8 MB", "milliseconds": 0.001}]
+            """.utf8
+        ).write(to: tmp)
+
+        let (failStatus, failOut) = try runBench(["--budgets", tmp.path, "--only", "checksums_8mb"])
+        #expect(failStatus != 0, "\(failOut)")
+        #expect(failOut.contains("OVER"))
+        #expect(failOut.contains("over budget by more than 20%"))
+
+        let workflow = try String(
+            contentsOf: Self.root.appendingPathComponent(".github/workflows/bench.yml"), encoding: .utf8)
+        #expect(workflow.contains("schedule:"))
+        #expect(workflow.contains("cron:"))
+        #expect(workflow.contains("scripts/bench"))
+        #expect(workflow.contains("actions/upload-artifact@"))
+    }
 }

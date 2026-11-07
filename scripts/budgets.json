@@ -1,0 +1,37 @@
+[
+  {
+    "id": "open_5gb",
+    "name": "Open 5 GB ZIP (unpack)",
+    "milliseconds": 12000
+  },
+  {
+    "id": "list_5gb",
+    "name": "List 5 GB ZIP (catalog)",
+    "milliseconds": 100
+  },
+  {
+    "id": "list_100k",
+    "name": "ZIP catalog, 100,000 entries",
+    "milliseconds": 200
+  },
+  {
+    "id": "delta_save_5gb",
+    "name": "One-file save on 5 GB ZIP",
+    "milliseconds": 6000
+  },
+  {
+    "id": "full_save_5gb",
+    "name": "Full save of 5 GB workspace",
+    "milliseconds": 15000
+  },
+  {
+    "id": "checksums_8mb",
+    "name": "CRC-32 and SHA-256 of 8 MB",
+    "milliseconds": 300
+  },
+  {
+    "id": "quicklook_10k",
+    "name": "Quick Look preview, 10,000 entries",
+    "milliseconds": 300
+  }
+]
