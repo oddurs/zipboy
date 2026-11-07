@@ -9,25 +9,27 @@ final class ArchiveDocument: NSDocument {
 
     struct TrackedFile: Equatable, Sendable {
         let entry: ZipCatalog.Entry
-        let inode: UInt64
-        let size: Int64
-        let modified: TimeInterval?
+        let identity: FileIdentity
     }
 
     /// Enough of a workspace file to tell later whether it still holds the bytes an entry was made from.
     struct FileIdentity: Equatable, Sendable {
         let inode: UInt64
         let size: Int64
-        let modified: TimeInterval?
+        let mtimeSec: Int
+        let mtimeNsec: Int
 
         static func of(_ url: URL) -> FileIdentity? {
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                (attrs[.type] as? FileAttributeType) == .typeRegular,
-                let inode = attrs[.systemFileNumber] as? UInt64,
-                let size = attrs[.size] as? Int64
+            var st = stat()
+            guard url.withUnsafeFileSystemRepresentation({ $0 != nil && lstat($0!, &st) == 0 }),
+                (st.st_mode & S_IFMT) == S_IFREG
             else { return nil }
             return FileIdentity(
-                inode: inode, size: size, modified: (attrs[.modificationDate] as? Date)?.timeIntervalSince1970)
+                inode: st.st_ino,
+                size: st.st_size,
+                mtimeSec: st.st_mtimespec.tv_sec,
+                mtimeNsec: st.st_mtimespec.tv_nsec
+            )
         }
 
         /// Every file under `root`, by its path there.
@@ -44,15 +46,21 @@ final class ArchiveDocument: NSDocument {
         let url: URL
         let inode: UInt64
         let size: Int64
-        let modified: TimeInterval?
+        let mtimeSec: Int
+        let mtimeNsec: Int
 
         static func of(_ url: URL) -> SourceSignature? {
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                let inode = attrs[.systemFileNumber] as? UInt64,
-                let size = attrs[.size] as? Int64
-            else { return nil }
-            let mod = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
-            return SourceSignature(url: url.standardizedFileURL, inode: inode, size: size, modified: mod)
+            var st = stat()
+            guard url.withUnsafeFileSystemRepresentation({ $0 != nil && lstat($0!, &st) == 0 }) else {
+                return nil
+            }
+            return SourceSignature(
+                url: url.standardizedFileURL,
+                inode: st.st_ino,
+                size: st.st_size,
+                mtimeSec: st.st_mtimespec.tv_sec,
+                mtimeNsec: st.st_mtimespec.tv_nsec
+            )
         }
     }
 
@@ -462,18 +470,11 @@ final class ArchiveDocument: NSDocument {
 
     /// Checks whether a workspace file at `path` is still untouched since unpacking from the source ZIP.
     func verbatimEntry(forPath path: String) -> ZipCatalog.Entry? {
-        guard let workspace else { return nil }
-        let fileURL = workspace.contents.appendingPathComponent(path)
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-            let inode = attrs[.systemFileNumber] as? UInt64,
-            let tracked = trackedByInode[inode]
+        guard let workspace,
+            let current = FileIdentity.of(workspace.contents.appendingPathComponent(path)),
+            let tracked = trackedByInode[current.inode],
+            current == tracked.identity
         else { return nil }
-        let currentSize = (attrs[.size] as? Int64) ?? 0
-        let currentMod = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
-        guard currentSize == tracked.size else { return nil }
-        if let expectedMod = tracked.modified, let currentMod, abs(currentMod - expectedMod) > 0.001 {
-            return nil
-        }
         return tracked.entry
     }
 
@@ -488,18 +489,12 @@ final class ArchiveDocument: NSDocument {
             let paths = try? Archive.contents(of: workspaceRoot)
         else { return nil }
 
-        let fm = FileManager.default
         var items: [ZipWriter.Item] = []
         items.reserveCapacity(paths.count)
 
         for path in paths {
-            let liveURL = workspaceRoot.appendingPathComponent(path)
             let snapURL = snapshotRoot.appendingPathComponent(path)
-            if let attrs = try? fm.attributesOfItem(atPath: liveURL.path),
-                (attrs[.type] as? FileAttributeType) == .typeRegular,
-                let entry = verbatimEntry(forPath: path),
-                !entry.isEncrypted
-            {
+            if let entry = verbatimEntry(forPath: path), !entry.isEncrypted {
                 let renamed = path == entry.path ? nil : path
                 items.append(.verbatim(entry, newPath: renamed))
             } else {
@@ -544,7 +539,7 @@ final class ArchiveDocument: NSDocument {
         var map: [UInt64: TrackedFile] = [:]
         for entry in catalog.entries where !entry.isDirectory && !entry.isSymlink {
             guard let file = identity(entry.path) else { continue }
-            map[file.inode] = TrackedFile(entry: entry, inode: file.inode, size: file.size, modified: file.modified)
+            map[file.inode] = TrackedFile(entry: entry, identity: file)
         }
         trackedByInode = map
     }
@@ -1137,8 +1132,9 @@ final class ErrorRecovery: NSObject {
 @MainActor
 enum Announcer {
     static func say(_ text: String) {
+        guard let app = NSApp else { return }
         NSAccessibility.post(
-            element: NSApp.mainWindow ?? NSApp as Any, notification: .announcementRequested,
+            element: app.mainWindow ?? app, notification: .announcementRequested,
             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 }
