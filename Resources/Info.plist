@@ -44,9 +44,6 @@
 				<string>public.bzip2-archive</string>
 				<string>org.tukaani.xz-archive</string>
 				<string>org.tukaani.lzma-archive</string>
-				<string>com.facebook.zstd-archive</string>
-				<string>org.lz4.lz4-archive</string>
-				<string>org.lzop.lzo-archive</string>
 				<string>public.z-archive</string>
 				<string>public.cpio-archive</string>
 				<string>com.apple.bom-compressed-cpio</string>
@@ -187,73 +184,6 @@
 				<key>public.mime-type</key>
 				<array>
 					<string>application/x-lzma</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>Zstandard Archive</string>
-			<key>UTTypeIdentifier</key>
-			<string>com.facebook.zstd-archive</string>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>zst</string>
-					<string>tzst</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/zstd</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>LZ4 Archive</string>
-			<key>UTTypeIdentifier</key>
-			<string>org.lz4.lz4-archive</string>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>lz4</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/x-lz4</string>
-				</array>
-			</dict>
-		</dict>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.data</string>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>LZOP Archive</string>
-			<key>UTTypeIdentifier</key>
-			<string>org.lzop.lzo-archive</string>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>lzo</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/x-lzop</string>
 				</array>
 			</dict>
 		</dict>

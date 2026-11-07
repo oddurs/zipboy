@@ -133,10 +133,13 @@ import ZipboyKit
         let controller = DocumentController()
         #expect(try controller.typeForContents(of: URL(fileURLWithPath: "/tmp/a.zip")) == ArchiveDocument.zipType)
         for ext in [
-            "rar", "7z", "tar", "tgz", "tbz2", "txz", "tlz", "tzst", "taz", "cpgz", "xar", "cab", "lha", "deb", "zipx",
+            "rar", "7z", "tar", "tgz", "tbz2", "txz", "tlz", "taz", "cpgz", "xar", "cab", "lha", "deb", "zipx",
         ] {
             let type = try controller.typeForContents(of: URL(fileURLWithPath: "/tmp/sample.\(ext)"))
             #expect(type == "public.archive", "\(ext)")
+        }
+        for unsupported in ["zst", "tzst", "lz4", "lzo"] {
+            #expect(!ZipMethod.archiveExtensions.contains(unsupported), "\(unsupported)")
         }
     }
 }

@@ -53,7 +53,7 @@ Every row is a file in `Tests/ZipboyKitTests/Fixtures/matrix`, opened by the tes
 | ZIP | stored, Deflate, Deflate64, bzip2, LZMA, XZ, PPMd, Zip64, streamed, Windows paths, symlinks, old Windows names (code page 437), and passwords (ZipCrypto, AES-128, AES-256) | encrypted Deflate64 |
 | RAR | RAR4 and RAR5, including solid RAR5, with Unicode names, hardlinks, and symlinks | encrypted RAR |
 | 7z | LZMA, LZMA2, PPMd, BZip2, Deflate, uncompressed, BCJ, solid | encrypted 7z |
-| tar | plain and pax, compressed with gzip, bzip2, xz, lzma, compress (`.Z`), or uuencode | zstd and lz4, which the libarchive in macOS can’t decode |
+| tar | plain and pax, compressed with gzip, bzip2, xz, lzma, compress (`.Z`), or uuencode | zstd, lz4, and lzop, which the libarchive in macOS can’t decode |
 | Others | cpio, cpgz, ISO 9660, XAR, ar, CAB, LHA | a single gzipped file that isn't an archive |
 
 Zipboy writes ZIP only. Reading and writing go through the libarchive that ships with macOS, so there

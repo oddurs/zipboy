@@ -312,7 +312,6 @@ final class SettingsWindowController: NSWindowController {
             "org.gnu.gnu-zip-archive",
             "public.bzip2-archive",
             "org.tukaani.xz-archive",
-            "com.github.facebook.zstd-archive",
         ]
         setDefaultApp(for: identifiers.compactMap(UTType.init))
     }
