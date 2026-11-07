@@ -150,6 +150,7 @@ import ZipboyKit
     let dir: URL
 
     init() throws {
+        _ = NSApplication.shared
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("ZipboySaves-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
@@ -324,6 +325,153 @@ import ZipboyKit
         _ = try Archive.extract(zip, into: root)
         let saved = try String(contentsOf: root.appendingPathComponent("notes.txt"), encoding: .utf8)
         #expect(saved == "new content")
+    }
+
+    @Test func renamedAndMovedFilesKeepCompressedPayloadAndUndoRedoTracksEntries() async throws {
+        let fm = FileManager.default
+        let srcFolder = dir.appendingPathComponent("tracking-src")
+        try fm.createDirectory(at: srcFolder.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: srcFolder.appendingPathComponent("folder"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: srcFolder.appendingPathComponent("dest"), withIntermediateDirectories: true)
+
+        let bodyA = Data(String(repeating: "alpha-compressible-payload\n", count: 250).utf8)
+        let bodyB = Data(String(repeating: "bravo-movable-payload\n", count: 250).utf8)
+        let bodyC = Data(String(repeating: "charlie-folder-payload\n", count: 250).utf8)
+        let bodyReplace = Data("same-len-123".utf8)
+        try bodyA.write(to: srcFolder.appendingPathComponent("a.txt"))
+        try bodyB.write(to: srcFolder.appendingPathComponent("sub/b.txt"))
+        try bodyC.write(to: srcFolder.appendingPathComponent("folder/c.txt"))
+        try bodyReplace.write(to: srcFolder.appendingPathComponent("inplace.txt"))
+
+        // Compress at .best so recompressing at default .balanced would produce different deflate bytes.
+        let zip = dir.appendingPathComponent("tracking.zip")
+        try Archive.writeZip(from: srcFolder, to: zip, compressionLevel: .best)
+
+        func compressedBytes(of path: String, in archive: URL) throws -> Data {
+            let catalog = try ZipCatalog.read(from: archive)
+            let entry = try #require(catalog.entries.first { $0.path == path })
+            let handle = try FileHandle(forReadingFrom: archive)
+            defer { try? handle.close() }
+            let range = try ZipCatalog.payloadRange(in: handle, for: entry)
+            try handle.seek(toOffset: range.offset)
+            return try #require(try handle.read(upToCount: Int(range.length)))
+        }
+
+        let origCompressedA = try compressedBytes(of: "a.txt", in: zip)
+        let origCompressedB = try compressedBytes(of: "sub/b.txt", in: zip)
+        let origCompressedC = try compressedBytes(of: "folder/c.txt", in: zip)
+
+        let document = ArchiveDocument()
+        document.fileURL = zip
+        document.fileType = ArchiveDocument.zipType
+        try document.read(from: zip, ofType: ArchiveDocument.zipType)
+        for _ in 0..<500 where document.loading != nil || document.tree == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        defer { document.close() }
+        guard let undo = document.undoManager else {
+            Issue.record("Expected NSDocument undoManager")
+            return
+        }
+        undo.groupsByEvent = false
+
+        // 1. Rename file, move file into another folder, and rename a parent folder.
+        undo.beginUndoGrouping()
+        try document.rename("a.txt", to: "alpha.txt")
+        undo.endUndoGrouping()
+        #expect(document.verbatimEntry(forPath: "a.txt") == nil)
+        #expect(document.verbatimEntry(forPath: "alpha.txt")?.path == "a.txt")
+
+        undo.beginUndoGrouping()
+        try document.move(["sub/b.txt"], into: "dest")
+        undo.endUndoGrouping()
+        #expect(document.verbatimEntry(forPath: "sub/b.txt") == nil)
+        #expect(document.verbatimEntry(forPath: "dest/b.txt")?.path == "sub/b.txt")
+
+        undo.beginUndoGrouping()
+        try document.rename("folder", to: "renamed-folder")
+        undo.endUndoGrouping()
+        #expect(document.verbatimEntry(forPath: "folder/c.txt") == nil)
+        #expect(document.verbatimEntry(forPath: "renamed-folder/c.txt")?.path == "folder/c.txt")
+
+        // Undo & redo across all three moves keep verbatim entry mappings intact.
+        undo.undo()  // undo folder rename
+        #expect(document.verbatimEntry(forPath: "folder/c.txt")?.path == "folder/c.txt")
+        undo.undo()  // undo move
+        #expect(document.verbatimEntry(forPath: "sub/b.txt")?.path == "sub/b.txt")
+        undo.undo()  // undo file rename
+        #expect(document.verbatimEntry(forPath: "a.txt")?.path == "a.txt")
+
+        undo.redo()
+        undo.redo()
+        undo.redo()
+        #expect(document.verbatimEntry(forPath: "alpha.txt")?.path == "a.txt")
+        #expect(document.verbatimEntry(forPath: "dest/b.txt")?.path == "sub/b.txt")
+        #expect(document.verbatimEntry(forPath: "renamed-folder/c.txt")?.path == "folder/c.txt")
+
+        // Delete + undo + redo + undo preserves verbatim mapping from holding area.
+        undo.beginUndoGrouping()
+        try document.remove(["alpha.txt"])
+        undo.endUndoGrouping()
+        #expect(document.verbatimEntry(forPath: "alpha.txt") == nil)
+        undo.undo()
+        #expect(document.verbatimEntry(forPath: "alpha.txt")?.path == "a.txt")
+        undo.redo()
+        #expect(document.verbatimEntry(forPath: "alpha.txt") == nil)
+        undo.undo()
+        #expect(document.verbatimEntry(forPath: "alpha.txt")?.path == "a.txt")
+
+        // Save after rename + move: compressed bytes are copied verbatim under the new names.
+        #expect(try await save(document, to: zip, as: .saveOperation) == nil)
+        #expect(try compressedBytes(of: "alpha.txt", in: zip) == origCompressedA)
+        #expect(try compressedBytes(of: "dest/b.txt", in: zip) == origCompressedB)
+        #expect(try compressedBytes(of: "renamed-folder/c.txt", in: zip) == origCompressedC)
+
+        let checkDir1 = dir.appendingPathComponent("check-1")
+        try fm.createDirectory(at: checkDir1, withIntermediateDirectories: true)
+        _ = try Archive.extract(zip, into: checkDir1)
+        #expect(try Data(contentsOf: checkDir1.appendingPathComponent("alpha.txt")) == bodyA)
+        #expect(try Data(contentsOf: checkDir1.appendingPathComponent("dest/b.txt")) == bodyB)
+        #expect(try Data(contentsOf: checkDir1.appendingPathComponent("renamed-folder/c.txt")) == bodyC)
+
+        // 2. Replace + undo + redo + post-save undo keeps tracking accurate at every step.
+        let replacementURL = dir.appendingPathComponent("alpha.txt")
+        let replacementData = Data("replaced-alpha-content".utf8)
+        try replacementData.write(to: replacementURL)
+
+        undo.beginUndoGrouping()
+        try await document.add([replacementURL], into: "") { _ in Prompts.Resolution.replace }
+        undo.endUndoGrouping()
+        #expect(document.verbatimEntry(forPath: "alpha.txt") == nil)
+
+        // Undo before save restores the original inode, matching the saved entry again.
+        undo.undo()
+        #expect(document.verbatimEntry(forPath: "alpha.txt")?.path == "alpha.txt")
+
+        // Redo puts the replacement back; saving writes the replacement and refreshes tracking.
+        undo.redo()
+        #expect(document.verbatimEntry(forPath: "alpha.txt") == nil)
+        #expect(try await save(document, to: zip, as: .saveOperation) == nil)
+
+        // Undoing AFTER a save restores the older inode (no longer in zip), so it must recompress cleanly.
+        undo.undo()
+        #expect(document.verbatimEntry(forPath: "alpha.txt") == nil)
+
+        // Immediate same-length in-place overwrite (sub-millisecond) must also invalidate verbatimEntry.
+        let inplaceLive = try #require(document.workspace).contents.appendingPathComponent("inplace.txt")
+        #expect(document.verbatimEntry(forPath: "inplace.txt") != nil)
+        let inplaceHandle = try FileHandle(forWritingTo: inplaceLive)
+        try inplaceHandle.write(contentsOf: Data("diff-len-123".utf8))
+        try inplaceHandle.close()
+        #expect(document.verbatimEntry(forPath: "inplace.txt") == nil)
+
+        #expect(try await save(document, to: zip, as: .saveOperation) == nil)
+        let checkDir2 = dir.appendingPathComponent("check-2")
+        try fm.createDirectory(at: checkDir2, withIntermediateDirectories: true)
+        _ = try Archive.extract(zip, into: checkDir2)
+        #expect(try Data(contentsOf: checkDir2.appendingPathComponent("alpha.txt")) == bodyA)
+        #expect(
+            try Data(contentsOf: checkDir2.appendingPathComponent("inplace.txt")) == Data("diff-len-123".utf8))
     }
 
     @Test func nestedArchiveTracksParentAndFinderServicesRoundTrip() async throws {

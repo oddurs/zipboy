@@ -3,12 +3,14 @@ id: 20
 uid: 8a846293-f908-4a05-82c6-73d9bd6df4c7
 title: Know which workspace files still match their archive entry
 type: feature
-status: backlog
+status: done
 milestone: v0.2
+assignee: Oddur Sigurdsson
 depends_on:
 - 18
 created: 2026-10-20
-updated: 2026-11-01
+updated: 2026-11-07
+closed_at: 2026-11-07
 priority: p0
 effort: m
 area: document
@@ -26,8 +28,8 @@ At unpack, record each file's catalog entry, inode, size, and modification time.
 
 - [x] An untouched file maps to its original entry
 - [x] A file saved over by another app counts as changed
-- [ ] A renamed or moved file keeps its data but writes a new name
-- [ ] Undo and redo keep the mapping right, covered by document tests
+- [x] A renamed or moved file keeps its data but writes a new name
+- [x] Undo and redo keep the mapping right, covered by document tests
 
 ## 2026-11-01
 
@@ -36,3 +38,11 @@ Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Workspace fi
 ## 2026-11-01
 
 Updated after 0068-0071 merged (#25, #26, #28, #30). Criterion 2: aFileReplacedDuringASaveReachesTheNextOne.
+
+## 2026-11-07
+
+Switched FileIdentity and SourceSignature to Darwin.lstat with exact nanosecond st_mtimespec matching (catching sub-millisecond same-size in-place overwrites while preserving identity across rename(2) moves and Holding-area undo/redo). Added SaveTests.renamedAndMovedFilesKeepCompressedPayloadAndUndoRedoTracksEntries covering file/folder rename and move payload reuse plus undo/redo across rename, move, delete, and replace.
+
+## Result
+
+Workspace files track catalog entries by inode, size, and nanosecond mtime across renames, moves, and undo/redo, covered by SaveTests.
