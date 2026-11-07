@@ -159,7 +159,12 @@ enum Deflate64 {
         }
         if winPos > 0 { try flush(winPos) }
 
-        guard totalOut == slice.uncompressedSize, UInt32(truncatingIfNeeded: crc) == slice.crc32 else {
+        guard totalOut == slice.uncompressedSize else {
+            throw ArchiveError.suspiciousArchive(
+                "The entry “\(rawName)” ended at \(totalOut) bytes instead of its declared \(slice.uncompressedSize) bytes."
+            )
+        }
+        guard UInt32(truncatingIfNeeded: crc) == slice.crc32 else {
             throw ArchiveError.unreadable("Corrupt Deflate64 data.")
         }
     }
@@ -309,6 +314,18 @@ enum Deflate64 {
                     let dataOffset = localOffset + 30 + localNameLen + localExtraLen
                     guard dataOffset <= fileSize, compSize <= fileSize - dataOffset else {
                         throw ArchiveError.unreadable("Truncated Deflate64 entry.")
+                    }
+                    let localFlags = local.u16(at: 6)
+                    if localFlags & 0x0008 == 0 {
+                        let localComp = local.u32(at: 18)
+                        let localUncomp = local.u32(at: 22)
+                        let expectedComp = UInt32(min(compSize, 0xFFFF_FFFF))
+                        let expectedUncomp = UInt32(min(uncompSize, 0xFFFF_FFFF))
+                        if localComp != expectedComp || localUncomp != expectedUncomp {
+                            throw ArchiveError.suspiciousArchive(
+                                "The entry “\(rawName)” declares different sizes in its local header and central directory."
+                            )
+                        }
                     }
                     return EntrySlice(
                         dataOffset: dataOffset, compressedSize: compSize, uncompressedSize: uncompSize, crc32: crc)

@@ -337,7 +337,25 @@ public enum Archive {
                 }
                 if let password, !password.isEmpty, isPasswordProblem(a) { throw ArchiveError.wrongPassword }
                 if isPasswordProblem(a) { throw ArchiveError.passwordRequired }
-                throw ArchiveError.unreadable(message(a))
+                let reason = message(a)
+                if reason.localizedCaseInsensitiveContains("malformed 64-bit uncompressed size")
+                    || reason.localizedCaseInsensitiveContains("malformed 64-bit compressed size")
+                {
+                    throw ArchiveError.suspiciousArchive(
+                        "An entry declares a 64-bit size that overflows (\(reason)) and cannot be trusted."
+                    )
+                }
+                throw ArchiveError.unreadable(reason)
+            }
+            if status == ARCHIVE_WARN {
+                let warning = message(a)
+                if warning.localizedCaseInsensitiveContains("inconsistent uncompressed size")
+                    || warning.localizedCaseInsensitiveContains("inconsistent compressed size")
+                {
+                    throw ArchiveError.suspiciousArchive(
+                        "The archive’s local header and central directory disagree on an entry’s size (\(warning))."
+                    )
+                }
             }
             entryCount += 1
             if entryCount > maxEntries {
@@ -436,6 +454,7 @@ public enum Archive {
                         let out = try FileHandle(forWritingTo: url)
                         defer { try? out.close() }
                         var written: Int64 = 0
+                        var didDeflate64 = false
                         while true {
                             // libarchive's XAR reader leaves the cumulative heap offset in its EOF block,
                             // which makes archive_read_data append bogus NUL padding if read past `size`.
@@ -456,13 +475,20 @@ public enum Archive {
                                         admit: { bytes, consumed in
                                             try expansion.add(bytes, consumed: before + Int64(consumed))
                                         })
+                                    didDeflate64 = true
                                     break
                                 }
                                 if encrypted { throw ArchiveError.wrongPassword }
-                                throw ArchiveError.unreadable(message(a))
+                                let reason = message(a)
+                                if reason.localizedCaseInsensitiveContains("uncompressed data is wrong size") {
+                                    throw ArchiveError.suspiciousArchive(
+                                        "The entry “\(path)” disagreed with its declared size and was stopped."
+                                    )
+                                }
+                                throw ArchiveError.unreadable(reason)
                             }
                             let chunkBytes = Int64(n)
-                            if sizeSet, size > 0, !isXar(a), written + chunkBytes > size {
+                            if sizeSet, size >= 0, !isXar(a), written + chunkBytes > size {
                                 throw ArchiveError.suspiciousArchive(
                                     "The entry “\(path)” expanded past its declared size and was stopped."
                                 )
@@ -479,6 +505,11 @@ public enum Archive {
                             written += chunkBytes
                             budget = budget.map { $0 - chunkBytes }
                             try report()
+                        }
+                        if !didDeflate64, sizeSet, size >= 0, !isXar(a), written != size {
+                            throw ArchiveError.suspiciousArchive(
+                                "The entry “\(path)” ended at \(written) bytes instead of its declared \(size) bytes."
+                            )
                         }
                     } catch {
                         try? fm.removeItem(at: url)
@@ -747,7 +778,15 @@ public enum Archive {
                 }
                 if let password, !password.isEmpty, isPasswordProblem(a) { throw ArchiveError.wrongPassword }
                 if isPasswordProblem(a) { throw ArchiveError.passwordRequired }
-                throw ArchiveError.unreadable(message(a))
+                let reason = message(a)
+                if reason.localizedCaseInsensitiveContains("malformed 64-bit uncompressed size")
+                    || reason.localizedCaseInsensitiveContains("malformed 64-bit compressed size")
+                {
+                    throw ArchiveError.suspiciousArchive(
+                        "An entry declares a 64-bit size that overflows (\(reason)) and cannot be trusted."
+                    )
+                }
+                throw ArchiveError.unreadable(reason)
             }
             if verification.format.isEmpty, let name = archive_format_name(a) {
                 verification.format = String(cString: name)
