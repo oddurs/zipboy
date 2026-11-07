@@ -84,10 +84,13 @@ import ZipboyKit
 
     @Test func recognizesBroadArchiveExtensions() {
         for ext in [
-            "zip", "zipx", "rar", "7z", "tar", "tgz", "tbz2", "txz", "tlz", "tzst", "taz", "cpgz", "xar", "cab", "lha",
+            "zip", "zipx", "rar", "7z", "tar", "tgz", "tbz2", "txz", "tlz", "taz", "cpgz", "xar", "cab", "lha",
             "deb",
         ] {
             #expect(ZipMethod.archiveExtensions.contains(ext), "\(ext)")
+        }
+        for unsupported in ["zst", "tzst", "lz4", "lzo"] {
+            #expect(!ZipMethod.archiveExtensions.contains(unsupported), "\(unsupported)")
         }
     }
 }

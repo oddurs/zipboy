@@ -37,7 +37,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ## v0.2 — Saves in seconds
 
-`#######···` 68% · 17 of 25 done · due 2026-12-18
+`########··` 72% · 18 of 25 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
@@ -50,7 +50,6 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [ ] `0022` Benchmarks with budgets for opening, listing, and saving <sup>feature · p1 · quality</sup>
 - [ ] `0024` Show the version and build from the release tag in About <sup>feature · p2 · shell</sup>
 - [ ] `0057` Read Deflate64 ZIPs, which Windows makes for large files <sup>feature · p2 · archive</sup>
-- [ ] `0073` Stop offering to open zstd and lz4 files we can't read <sup>bug · p2 · distribution</sup>
 
 ### done
 
@@ -67,6 +66,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [x] `0070` Encoding reloads, nested archives, and Keychain survive edits and saves <sup>bug · p1 · document</sup>
 - [x] `0071` Export keeps encryption, and archive I/O stays off shared state <sup>bug · p1 · archive</sup>
 - [x] `0072` Reconcile the board with the 2026-11-01 batch <sup>chore · p1 · quality</sup>
+- [x] `0073` Stop offering to open zstd and lz4 files we can't read <sup>bug · p2 · distribution</sup>
 - [x] `0074` Move timing budgets out of the unit suite <sup>chore · p2 · quality</sup>
 - [x] `0075` Count hard links against the bomb guard <sup>bug · p1 · archive</sup>
 - [x] `0086` About Zipboy credits libarchive and links the project <sup>docs · p3 · shell</sup>

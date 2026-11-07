@@ -1,6 +1,9 @@
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 import ZipboyKit
+
+@testable import Zipboy
 
 /// What scripts/task assembles into the app bundle, checked against the source tree.
 @Suite struct BundleTests {
@@ -135,5 +138,94 @@ import ZipboyKit
     @Test func shipsItsIcon() throws {
         let name = try #require(Self.infoPlist()["CFBundleIconFile"] as? String)
         #expect(FileManager.default.fileExists(atPath: Self.root.appendingPathComponent("Resources/\(name).icns").path))
+    }
+
+    @MainActor
+    @Test func everyDeclaredExtensionHasAPassingFixture() throws {
+        let info = try Self.infoPlist()
+        let docTypes = try #require(info["CFBundleDocumentTypes"] as? [[String: Any]])
+        let imported = info["UTImportedTypeDeclarations"] as? [[String: Any]] ?? []
+        var importedExtensions: [String: [String]] = [:]
+        for item in imported {
+            guard let id = item["UTTypeIdentifier"] as? String else { continue }
+            let tags = item["UTTypeTagSpecification"] as? [String: Any]
+            importedExtensions[id] = tags?["public.filename-extension"] as? [String] ?? []
+        }
+
+        var openedTypes = Set<String>()
+        var declaredExtensions = Set(ZipMethod.archiveExtensions.map { $0.lowercased() })
+        for doc in docTypes where doc["NSDocumentClass"] != nil {
+            for id in doc["LSItemContentTypes"] as? [String] ?? [] {
+                openedTypes.insert(id)
+                guard id != "public.archive" else { continue }
+                let exts = Set((UTType(id)?.tags[.filenameExtension] ?? []) + (importedExtensions[id] ?? []))
+                    .map { $0.lowercased() }
+                #expect(!exts.isEmpty, "\(id) declares no filename extensions")
+                declaredExtensions.formUnion(exts)
+            }
+        }
+
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZipboyBundleFixtures-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        func canExtract(_ file: URL, into out: URL) -> Bool {
+            try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+            do {
+                _ = try Archive.extract(file, into: out)
+                return true
+            } catch ArchiveError.passwordRequired {
+                return (try? Archive.extract(file, into: out, password: "secret")) != nil
+            } catch {
+                return false
+            }
+        }
+
+        let matrix = Self.root.appendingPathComponent("Tests/ZipboyKitTests/Fixtures/matrix")
+        let matrixFiles = try FileManager.default.contentsOfDirectory(at: matrix, includingPropertiesForKeys: nil)
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var passingFixtures: [URL] = []
+        for (index, file) in matrixFiles.enumerated()
+        where canExtract(file, into: scratch.appendingPathComponent("matrix-\(index)")) {
+            passingFixtures.append(file)
+        }
+
+        // Standard container/filter aliases that share the exact wire format of a fixture in the matrix.
+        let canonicalSuffix: [String: String] = [
+            "zipx": "zip", "cbz": "zip", "jar": "zip", "war": "zip", "ear": "zip",
+            "ipa": "zip", "apk": "zip", "whl": "zip", "xpi": "zip", "nupkg": "zip",
+            "cbr": "rar",
+            "cb7": "7z",
+            "cbt": "tar",
+            "tgz": "tar.gz", "gzip": "gz",
+            "tbz": "tar.bz2", "tbz2": "tar.bz2", "bz": "bz2",
+            "txz": "tar.xz",
+            "tlz": "tar.lzma",
+            "taz": "tar.z",
+            "pax": "cpio",
+            "iso": "iso.gz",
+            "lzh": "lha",
+            "deb": "ar",
+            "pkg": "xar", "mpkg": "xar",
+        ]
+
+        let controller = DocumentController()
+        for ext in declaredExtensions.sorted() {
+            let suffix = canonicalSuffix[ext] ?? ext
+            guard
+                let fixture = passingFixtures.first(where: { $0.lastPathComponent.lowercased().hasSuffix(".\(suffix)") }
+                )
+            else {
+                Issue.record("No passing fixture in Fixtures/matrix covers .\(ext)")
+                continue
+            }
+            let sample = scratch.appendingPathComponent("sample.\(ext)")
+            try? FileManager.default.removeItem(at: sample)
+            try FileManager.default.copyItem(at: fixture, to: sample)
+            let docType = try controller.typeForContents(of: sample)
+            #expect(openedTypes.contains(docType), ".\(ext) mapped to undeclared document type \(docType)")
+            #expect(canExtract(sample, into: scratch.appendingPathComponent("ext-\(ext)")), ".\(ext) failed to extract")
+        }
     }
 }

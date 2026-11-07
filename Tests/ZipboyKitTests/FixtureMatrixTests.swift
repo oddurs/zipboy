@@ -52,6 +52,8 @@ import Testing
         "cpio-gz.cpgz": .opens(standard),
         "xar.xar": .opens(standard),
         "ar.ar": .opens(["hello.txt"]),
+        "cab.cab": .opens(standard),
+        "lha.lha": .opens(standard),
         "iso.iso.gz": .opens(standard),
         "gzip-single.gz": .fails("Unrecognized archive format"),
         "rar4-normal.rar": .opens([

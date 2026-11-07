@@ -24,8 +24,8 @@ public enum ZipMethod: Equatable, Sendable {
     public static let archiveExtensions: Set<String> = [
         "zip", "zipx", "cbz", "jar", "war", "ear", "apk", "ipa", "whl", "xpi", "nupkg",
         "rar", "cbr", "7z", "cb7",
-        "tar", "tgz", "tbz", "tbz2", "txz", "tlz", "tzst", "taz", "cbt",
-        "gz", "bz2", "xz", "lzma", "zst", "z", "lz4", "lzo", "uu",
+        "tar", "tgz", "tbz", "tbz2", "txz", "tlz", "taz", "cbt",
+        "gz", "bz2", "xz", "lzma", "z", "uu",
         "cpio", "cpgz", "iso", "cab", "lha", "lzh", "ar", "deb", "xar", "pkg",
     ]
 }
