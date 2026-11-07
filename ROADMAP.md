@@ -4,9 +4,13 @@
 
 ## v0.1 — First release
 
-`##########` 95% · 19 of 20 done · due 2026-11-20
+`##########` 90% · 19 of 21 done · due 2026-11-20
 
 A stranger downloads a notarized Zipboy, opens any common archive, previews it, changes it, and extracts from it, and every change lands in a correct ZIP without their original ever being at risk.
+
+### backlog
+
+- [ ] `0090` Extracted files keep the quarantine mark of the archive they came from <sup>bug · p0 · archive</sup>
 
 ### blocked
 
@@ -94,7 +98,7 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 
 ## v0.4 — Part of the Mac
 
-`######····` 56% · 9 of 16 done · due 2027-03-12
+`#####·····` 45% · 9 of 20 done · due 2027-03-12
 
 Zipboy works from the Finder as well as in its own window: Quick Look shows what's in an archive, Quick Actions compress and extract, updates arrive by themselves, and every flow works with VoiceOver and the keyboard alone.
 
@@ -104,6 +108,10 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [ ] `0032` Finder Quick Actions: Compress with Zipboy and Extract Here <sup>feature · p0 · system</sup>
 - [ ] `0036` Open an archive inside an archive in its own window <sup>feature · p2 · document</sup>
 - [ ] `0038` Offer once to open ZIPs with Zipboy <sup>feature · p2 · system</sup>
+- [ ] `0091` Move an archive to the Trash once it's extracted <sup>feature · p2 · shell</sup>
+- [ ] `0092` Which split archives can libarchive join? <sup>spike · p1 · archive</sup>
+- [ ] `0093` Open split archives from any of their pieces <sup>feature · p1 · archive</sup>
+- [ ] `0095` Extract many archives in one go <sup>feature · p2 · shell</sup>
 
 ### planned
 
@@ -125,7 +133,7 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 
 ## v1.0 — The promise
 
-`··········` 0% · 0 of 8 done · due 2027-04-23
+`··········` 0% · 0 of 10 done · due 2027-04-23
 
 An archive behaves like a Finder folder, reliably, for anyone: hardened against hostile archives, documented, and proven by a public beta. No new features.
 
@@ -138,6 +146,8 @@ An archive behaves like a Finder folder, reliably, for anyone: hardened against 
 - [ ] `0044` A two-week public beta with every crash and data-loss report closed <sup>chore · p0 · quality</sup>
 - [ ] `0045` Release checklist and the v1.0 tag <sup>chore · p0 · distribution</sup>
 - [ ] `0082` Every user-facing string goes through the localization tables <sup>chore · p2 · quality</sup>
+- [ ] `0096` Keep going past a damaged entry and save what's readable <sup>feature · p2 · archive</sup>
+- [ ] `0097` Rebuild a ZIP whose central directory is missing <sup>feature · p3 · archive</sup>
 
 ### planned
 
@@ -145,7 +155,7 @@ An archive behaves like a Finder folder, reliably, for anyone: hardened against 
 
 ## later — Later
 
-`##········` 13% · 1 of 8 done
+`#·········` 5% · 1 of 19 done
 
 Good ideas that are not on the path to v1.0. Items go here instead of being argued about.
 
@@ -158,6 +168,17 @@ Good ideas that are not on the path to v1.0. Items go here instead of being argu
 - [ ] `0051` Spotlight finds files inside archives <sup>feature · p3 · system</sup>
 - [ ] `0052` Icon and column views <sup>feature · p3 · browser</sup>
 - [ ] `0088` Ask once for a folder's access, so writing beside an archive survives the sandbox <sup>feature · p3 · distribution</sup>
+- [ ] `0094` Make split archives <sup>feature · p3 · archive</sup>
+- [ ] `0098` Which other containers are worth opening? <sup>spike · p3 · archive</sup>
+- [ ] `0099` Bring back Mac metadata from __MACOSX <sup>feature · p3 · archive</sup>
+- [ ] `0100` Unpack whatever lands in a watched folder <sup>feature · p3 · system</sup>
+- [ ] `0101` Try saved passwords on a new archive <sup>feature · p3 · document</sup>
+- [ ] `0102` Search inside the files in an archive <sup>feature · p3 · browser</sup>
+- [ ] `0103` Compare an archive with a folder or another archive <sup>feature · p3 · browser</sup>
+- [ ] `0104` Show what's taking up the space in an archive <sup>feature · p3 · browser</sup>
+- [ ] `0105` Warn when a ZIP's names won't survive on Windows <sup>feature · p3 · archive</sup>
+- [ ] `0106` Choose the compression method and see the size first <sup>feature · p3 · archive</sup>
+- [ ] `0107` Can Zipboy write archives with encrypted names? <sup>spike · p3 · archive</sup>
 
 ### done
 
