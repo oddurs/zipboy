@@ -57,11 +57,12 @@ public enum TextEncoding: String, CaseIterable, Sendable {
 
     /// Decodes a raw filename byte sequence using `self`, or auto-detecting when `.auto`.
     public func decode(_ data: Data, utf8Flagged: Bool = false) -> String {
+        let isASCII = data.withUnsafeBytes { !$0.contains(where: { $0 >= 0x80 }) }
+        if isASCII {
+            return String(decoding: data, as: UTF8.self)
+        }
         if utf8Flagged, let str = String(data: data, encoding: .utf8) {
             return str
-        }
-        if data.allSatisfy({ $0 < 0x80 }), let ascii = String(data: data, encoding: .ascii) {
-            return ascii
         }
         switch self {
         case .auto:

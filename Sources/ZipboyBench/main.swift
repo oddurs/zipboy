@@ -41,6 +41,51 @@ try Archive.writeZip(from: src, to: zip, compressionLevel: .fast)
 
 try measure(Budget(name: "ZIP catalog, 201 entries", milliseconds: 250)) { _ = try ZipCatalog.read(from: zip) }
 
+let hundredKZip = dir.appendingPathComponent("hundred-k.zip")
+do {
+    func appendLE<each T: FixedWidthInteger>(_ data: inout Data, _ values: repeat each T) {
+        repeat data.append(contentsOf: Swift.withUnsafeBytes(of: (each values).littleEndian, Array.init))
+    }
+    let count = 100_000
+    let dosDate: UInt16 = (46 << 9) | (11 << 5) | 7
+    let dosTime: UInt16 = (12 << 11)
+    var local = Data(capacity: count * 56)
+    var central = Data(capacity: count * 72)
+    for index in 0..<count {
+        let name = Data("folder-\(index % 100)/entry-\(index).txt".utf8)
+        let offset = UInt32(local.count)
+        appendLE(&local, UInt32(0x0403_4b50), UInt16(20), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+        appendLE(&local, UInt32(0), UInt32(0), UInt32(0), UInt16(name.count), UInt16(0))
+        local.append(name)
+
+        appendLE(
+            &central, UInt32(0x0201_4b50), UInt16(0x031E), UInt16(20), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+        appendLE(&central, UInt32(0), UInt32(0), UInt32(0), UInt16(name.count), UInt16(0), UInt16(0))
+        appendLE(&central, UInt16(0), UInt16(0), UInt32(0o100644) << 16, offset)
+        central.append(name)
+    }
+    let cdOffset = UInt64(local.count)
+    let cdSize = UInt64(central.count)
+    let z64Offset = cdOffset + cdSize
+    var tail = Data()
+    appendLE(&tail, UInt32(0x0606_4b50), UInt64(44), UInt16(45), UInt16(45), UInt32(0), UInt32(0))
+    appendLE(&tail, UInt64(count), UInt64(count), cdSize, cdOffset)
+    appendLE(&tail, UInt32(0x0706_4b50), UInt32(0), z64Offset, UInt32(1))
+    appendLE(
+        &tail, UInt32(0x0605_4b50), UInt16(0), UInt16(0), UInt16(0xFFFF), UInt16(0xFFFF), UInt32(cdSize),
+        UInt32(cdOffset), UInt16(0))
+    FileManager.default.createFile(atPath: hundredKZip.path, contents: nil)
+    let out = try FileHandle(forWritingTo: hundredKZip)
+    try out.write(contentsOf: local)
+    try out.write(contentsOf: central)
+    try out.write(contentsOf: tail)
+    try out.close()
+}
+try measure(Budget(name: "ZIP catalog, 100,000 entries", milliseconds: 200)) {
+    let parsed = try ZipCatalog.read(from: hundredKZip)
+    precondition(parsed.entries.count == 100_000)
+}
+
 let catalog = try ZipCatalog.read(from: zip)
 let edited = dir.appendingPathComponent("edited.txt")
 try Data("updated-entry".utf8).write(to: edited)
