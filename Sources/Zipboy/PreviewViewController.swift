@@ -219,7 +219,7 @@ final class PreviewViewController: NSViewController {
                     let clock = ContinuousClock()
                     let matStart = clock.now
                     let urls = try await archive.materialize([path])
-                    self.lastMaterializationElapsed = clock.now - matStart
+                    self.lastMaterializationElapsed = archive.lastMaterializationDuration ?? (clock.now - matStart)
                     guard !Task.isCancelled, let url = urls.first, self.showing?.key == key else { return }
                     if usesQuickLook {
                         self.preview(url)

@@ -105,6 +105,7 @@ final class ArchiveDocument: NSDocument {
         [:]
     private var materializingByPath: [String: Task<URL, Error>] = [:]
     private(set) var materializationCounts: [String: Int] = [:]
+    private(set) var lastMaterializationDuration: Duration?
 
     /// How far unpacking has got, from 0 to 1, or nil when the contents are ready.
     private(set) var loading: Double?
@@ -994,6 +995,17 @@ final class ArchiveDocument: NSDocument {
         materializingByPath[path] != nil
     }
 
+    func hasUnmaterializedItems(under path: String) -> Bool {
+        let clean = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if unmaterialized[clean] != nil { return true }
+        let prefix = clean + "/"
+        if unmaterialized.keys.contains(where: { $0.hasPrefix(prefix) }) { return true }
+        if unmaterializedFolders.keys.contains(where: { $0 == clean || $0.hasPrefix(prefix) }) {
+            return !FileManager.default.fileExists(atPath: workspace?.url(clean).path ?? "")
+        }
+        return false
+    }
+
     private func finishMaterializing(path: String, entry: ZipCatalog.Entry, url: URL) {
         materializingByPath.removeValue(forKey: path)
         if unmaterialized[path]?.localHeaderOffset == entry.localHeaderOffset {
@@ -1030,6 +1042,8 @@ final class ArchiveDocument: NSDocument {
         let chosenEncoding = encoding
 
         let task = Task.detached(priority: .userInitiated) { [weak self] () throws -> URL in
+            let clock = ContinuousClock()
+            let start = clock.now
             try Archive.extractEntry(
                 entry,
                 from: srcURL,
@@ -1040,7 +1054,9 @@ final class ArchiveDocument: NSDocument {
                 encoding: chosenEncoding,
                 progress: progress
             )
+            let elapsed = clock.now - start
             await MainActor.run {
+                self?.lastMaterializationDuration = elapsed
                 self?.finishMaterializing(path: path, entry: entry, url: destURL)
             }
             return destURL
@@ -1281,7 +1297,13 @@ final class ArchiveDocument: NSDocument {
         let quarantineRoot = isFolder ? destination : destination.deletingLastPathComponent()
 
         if isFolder {
-            try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            if isDirectory(source) {
+                try FileCopy.copy(source, to: destination) { bytes in
+                    progress?(bytes) ?? true
+                }
+            } else {
+                try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            }
             if let mark = context.quarantine {
                 Archive.setQuarantine(mark, on: destination)
             }
@@ -1297,7 +1319,7 @@ final class ArchiveDocument: NSDocument {
             }
         }
 
-        var completedPrior: Int64 = 0
+        var completedPrior: Int64 = isFolder && isDirectory(source) ? FileCopy.size(of: [source]) : 0
         for (suffix, entry) in context.entries {
             let target =
                 suffix.isEmpty
