@@ -37,7 +37,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ## v0.2 — Saves in seconds
 
-`#######···` 64% · 16 of 25 done · due 2026-12-18
+`#######···` 68% · 17 of 25 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
@@ -51,7 +51,6 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [ ] `0024` Show the version and build from the release tag in About <sup>feature · p2 · shell</sup>
 - [ ] `0057` Read Deflate64 ZIPs, which Windows makes for large files <sup>feature · p2 · archive</sup>
 - [ ] `0073` Stop offering to open zstd and lz4 files we can't read <sup>bug · p2 · distribution</sup>
-- [ ] `0075` Count hard links against the bomb guard <sup>bug · p1 · archive</sup>
 
 ### done
 
@@ -69,6 +68,7 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [x] `0071` Export keeps encryption, and archive I/O stays off shared state <sup>bug · p1 · archive</sup>
 - [x] `0072` Reconcile the board with the 2026-11-01 batch <sup>chore · p1 · quality</sup>
 - [x] `0074` Move timing budgets out of the unit suite <sup>chore · p2 · quality</sup>
+- [x] `0075` Count hard links against the bomb guard <sup>bug · p1 · archive</sup>
 - [x] `0086` About Zipboy credits libarchive and links the project <sup>docs · p3 · shell</sup>
 - [x] `0087` Every sheet and prompt cancels with Escape and Command-period <sup>bug · p2 · shell</sup>
 

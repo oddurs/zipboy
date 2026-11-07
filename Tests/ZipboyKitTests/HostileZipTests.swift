@@ -157,6 +157,30 @@ import zlib
         #expect(try Archive.written(in: out) <= 1_000_000_000)
     }
 
+    @Test func stopsATarHardlinkBombAtTheExpansionGuard() throws {
+        let source = try folder("hardlink-bomb-src")
+        let seed = source.appendingPathComponent("seed.bin")
+        try Data(count: 64 << 20).write(to: seed)
+        var members = ["seed.bin"]
+        for index in 0..<100 {
+            let name = String(format: "link-%03d.bin", index)
+            try FileManager.default.linkItem(at: seed, to: source.appendingPathComponent(name))
+            members.append(name)
+        }
+        let tar = dir.appendingPathComponent("hardlink-bomb.tar")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/bsdtar")
+        process.arguments = ["-cf", tar.path, "-C", source.path] + members
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+
+        let out = try folder("hardlink-bomb-out")
+        let reason = suspicion { _ = try Archive.extract(tar, into: out, capacity: { 1 << 40 }) }
+        #expect(reason?.contains("decompression bomb") == true)
+        #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent("link-099.bin").path))
+    }
+
     // MARK: The Deflate64 fallback streams under the same guards
 
     @Test func stopsADeflate64EntryThatExpandsPastItsDeclaredSize() throws {
