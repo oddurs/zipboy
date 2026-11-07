@@ -31,7 +31,7 @@ final class PreviewViewController: NSViewController {
 
     private var checksums: [String: Checksums] = [:]
     /// The item on show and its key, so a checksum that finishes late doesn't land on the next one.
-    private var showing: (key: String, node: Node, catalogCRC: String?)?
+    private var showing: (key: String, node: Node, catalogCRC: String?, symlinkTarget: String?)?
 
     override func loadView() {
 
@@ -172,21 +172,24 @@ final class PreviewViewController: NSViewController {
     private func showItem(_ node: Node, archive: ArchiveDocument) {
         footer.isHidden = false
         let key = "\(node.url.path)|\(node.size)|\(node.modified?.timeIntervalSince1970 ?? 0)"
-        if Self.previewsInQuickLook(node) {
+        let existsOnDisk = FileManager.default.fileExists(atPath: node.url.path)
+        if Self.previewsInQuickLook(node), existsOnDisk {
             preview(node.url)
         } else {
-            picture(NSWorkspace.shared.icon(forFile: node.url.path))
+            picture(BrowserViewController.iconForNode(node))
         }
         name.stringValue = node.name
         subtitle.stringValue = node.kind
         setBadges([])
 
         let catalogCRC = archive.verbatimEntry(forPath: node.path).map { String(format: "%08X", $0.crc32) }
-        showing = (key, node, catalogCRC)
-        table.show(Self.rows(for: node, checksums: checksums[key], catalogCRC: catalogCRC))
+        let symlinkTarget = node.isSymlink ? archive.symlinkTarget(for: node) : nil
+        showing = (key, node, catalogCRC, symlinkTarget)
+        table.show(
+            Self.rows(for: node, checksums: checksums[key], catalogCRC: catalogCRC, symlinkTarget: symlinkTarget))
 
         // Checksums are worth showing, not worth waiting for: they fill in when they're ready.
-        if Self.isFile(node), checksums[key] == nil, node.size <= 64 << 20 {
+        if Self.isFile(node), existsOnDisk, checksums[key] == nil, node.size <= 64 << 20 {
             let url = node.url
             Task.detached { [weak self] in
                 // An unreadable file keeps the rows it has; there's nothing for the person to do about it.
@@ -207,7 +210,13 @@ final class PreviewViewController: NSViewController {
     private func checksumsArrived(_ computed: Checksums, key: String) {
         checksums[key] = computed
         guard let showing, showing.key == key else { return }
-        table.show(Self.rows(for: showing.node, checksums: computed, catalogCRC: showing.catalogCRC))
+        table.show(
+            Self.rows(
+                for: showing.node,
+                checksums: computed,
+                catalogCRC: showing.catalogCRC,
+                symlinkTarget: showing.symlinkTarget
+            ))
     }
 
     private func showArchive(_ archive: ArchiveDocument) {
@@ -255,7 +264,7 @@ final class PreviewViewController: NSViewController {
     private func showSelection(_ nodes: [Node]) {
         showing = nil
         footer.isHidden = false
-        picture(Self.fan(nodes.prefix(3).map { NSWorkspace.shared.icon(forFile: $0.url.path) }))
+        picture(Self.fan(nodes.prefix(3).map(BrowserViewController.iconForNode)))
         let total = nodes.reduce(Int64(0)) { $0 + $1.size }
         let folders = nodes.filter(\.isDirectory).count
         let parents = Set(nodes.map { ($0.path as NSString).deletingLastPathComponent })
@@ -313,9 +322,17 @@ final class PreviewViewController: NSViewController {
         self.primary.isEnabled = enabled
     }
 
-    private static func rows(for node: Node, checksums: Checksums?, catalogCRC: String?) -> [(String, String)?] {
+    private static func rows(
+        for node: Node,
+        checksums: Checksums?,
+        catalogCRC: String?,
+        symlinkTarget: String? = nil
+    ) -> [(String, String)?] {
         let folder = (node.path as NSString).deletingLastPathComponent
-        let target = node.isSymlink ? (try? FileManager.default.destinationOfSymbolicLink(atPath: node.url.path)) : nil
+        let target =
+            node.isSymlink
+            ? (symlinkTarget ?? (try? FileManager.default.destinationOfSymbolicLink(atPath: node.url.path)))
+            : nil
         return [
             node.isDirectory ? ("Contains", items(node.descendantCount)) : nil,
             ("Size", exactSize(node)),

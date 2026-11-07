@@ -458,6 +458,7 @@ import ZipboyKit
         #expect(document.verbatimEntry(forPath: "alpha.txt") == nil)
 
         // Immediate same-length in-place overwrite (sub-millisecond) must also invalidate verbatimEntry.
+        _ = try await document.materialize(["inplace.txt"])
         let inplaceLive = try #require(document.workspace).contents.appendingPathComponent("inplace.txt")
         #expect(document.verbatimEntry(forPath: "inplace.txt") != nil)
         let inplaceHandle = try FileHandle(forWritingTo: inplaceLive)
@@ -606,18 +607,18 @@ import ZipboyKit
         let out = source.deletingLastPathComponent().appendingPathComponent("out")
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let progress = Progress(totalUnitCount: 3 * (2 << 20))
-        var calls = 0
+        let calls = Locked(0)
         // Stops partway through the second file, after the first is in place.
         let files = (0..<3).map { source.appendingPathComponent("part \($0).bin") }
         let watcher = progress.observe(\.completedUnitCount) { progress, _ in
-            calls += 1
+            calls.value += 1
             if progress.completedUnitCount > (2 << 20) { progress.cancel() }
         }
         defer { watcher.invalidate() }
         #expect(throws: ArchiveError.cancelled) {
             _ = try BrowserViewController.copy(files, into: out, progress: progress, clone: false)
         }
-        #expect(calls > 0)
+        #expect(calls.value > 0)
         #expect(try FileManager.default.contentsOfDirectory(atPath: out.path).isEmpty)
     }
 
@@ -1009,6 +1010,7 @@ final class RecordingNotifier: Notifier {
         let (innerDoc, innerBrowser) = try await open(innerURL)
         innerDoc.parentDocument = outerDoc
         defer { innerDoc.close() }
+        _ = try await innerDoc.materialize(["nested", "nested/tool", "notes.txt"])
         for path in ["nested", "nested/tool", "notes.txt"] {
             let unpacked = try #require(innerDoc.tree?.find(path)?.url)
             #expect(isQuarantined(unpacked), "\(path)")
@@ -1018,5 +1020,119 @@ final class RecordingNotifier: Notifier {
         await innerBrowser.extract(into: nestedExtractDir, items: [])?.value
         #expect(isQuarantined(nestedExtractDir.appendingPathComponent("Inner")))
         #expect(isQuarantined(nestedExtractDir.appendingPathComponent("Inner/nested/tool")))
+    }
+
+    @Test func catalogBrowsingListsHundredThousandEntriesUnderOneSecondAndWritesNothingUntilUsed() async throws {
+        let fm = FileManager.default
+        func appendLE<each T: FixedWidthInteger>(_ data: inout Data, _ values: repeat each T) {
+            repeat data.append(contentsOf: Swift.withUnsafeBytes(of: (each values).littleEndian, Array.init))
+        }
+
+        // 1. Sorting, search, and folder sizes work before anything is unpacked, and opening writes
+        // nothing under $TMPDIR/Zipboy until an entry is used.
+        let sampleSrc = dir.appendingPathComponent("cat-browse-src")
+        try fm.createDirectory(at: sampleSrc.appendingPathComponent("docs/guides"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: sampleSrc.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try Data(repeating: 0x61, count: 120).write(to: sampleSrc.appendingPathComponent("docs/guides/intro.md"))
+        try Data(repeating: 0x62, count: 400).write(to: sampleSrc.appendingPathComponent("docs/api.pdf"))
+        try Data(repeating: 0x63, count: 80).write(to: sampleSrc.appendingPathComponent("src/main.swift"))
+        try Data(repeating: 0x64, count: 30).write(to: sampleSrc.appendingPathComponent("README.txt"))
+        try Data(repeating: 0x65, count: 10).write(to: sampleSrc.appendingPathComponent(".hidden"))
+        let sampleZip = dir.appendingPathComponent("SampleCatalog.zip")
+        try Archive.writeZip(from: sampleSrc, to: sampleZip)
+
+        let (doc, browser) = try await open(sampleZip)
+        defer { doc.close() }
+
+        let ws = try #require(doc.workspace)
+        #expect(!ws.isCreatedOnDisk)
+        #expect(!fm.fileExists(atPath: ws.folder.path))
+        #expect(!fm.fileExists(atPath: ws.contents.path))
+
+        let tree = try #require(doc.tree)
+        #expect(tree.size == 640)
+        #expect(tree.find("docs")?.size == 520)
+        #expect(tree.find("docs/guides")?.size == 120)
+        #expect(tree.find("src")?.size == 80)
+
+        for key in [Node.SortKey.name, .size, .modified, .kind] {
+            tree.sort(by: key, ascending: true)
+            tree.sort(by: key, ascending: false)
+        }
+        tree.sort(by: .size, ascending: false, foldersFirst: false)
+        #expect(tree.children.map(\.name) == ["docs", "src", "README.txt", ".hidden"])
+
+        let searched = try #require(tree.filtered("intro"))
+        #expect(searched.find("docs/guides/intro.md") != nil)
+        #expect(searched.find("src/main.swift") == nil)
+        let withoutHidden = try #require(tree.filtered("", showHiddenFiles: false))
+        #expect(withoutHidden.find(".hidden") == nil)
+        #expect(!ws.isCreatedOnDisk)
+        #expect(!fm.fileExists(atPath: ws.folder.path))
+
+        // Materializing one entry creates the workspace and unpacks only that entry.
+        _ = browser
+        let materializedURLs = try await doc.materialize(["docs/guides/intro.md"])
+        #expect(materializedURLs == [ws.url("docs/guides/intro.md")])
+        #expect(ws.isCreatedOnDisk)
+        #expect(fm.fileExists(atPath: ws.url("docs/guides/intro.md").path))
+        #expect(!fm.fileExists(atPath: ws.url("src/main.swift").path))
+        #expect(!doc.isDocumentEdited)
+
+        // 2. A 100,000-entry ZIP lists in under a second without unpacking.
+        let zip100k = dir.appendingPathComponent("hundred-thousand.zip")
+        do {
+            let count = 100_000
+            let dosDate: UInt16 = (46 << 9) | (11 << 5) | 7
+            let dosTime: UInt16 = (12 << 11)
+            let payload = Data("0123456789".utf8)
+            let exactCRC: UInt32 = 0xA684_C7C6
+            var local = Data(capacity: count * 62)
+            var central = Data(capacity: count * 70)
+            for idx in 0..<count {
+                let name = Data("dir\(idx % 100)/file-\(idx).txt".utf8)
+                let offset = UInt32(local.count)
+                appendLE(&local, UInt32(0x0403_4b50), UInt16(20), UInt16(1 << 11), UInt16(0), dosTime, dosDate)
+                appendLE(&local, exactCRC, UInt32(10), UInt32(10), UInt16(name.count), UInt16(0))
+                local.append(name)
+                local.append(payload)
+
+                appendLE(
+                    &central, UInt32(0x0201_4b50), UInt16(0x031E), UInt16(20), UInt16(1 << 11), UInt16(0), dosTime,
+                    dosDate)
+                appendLE(&central, exactCRC, UInt32(10), UInt32(10), UInt16(name.count), UInt16(0), UInt16(0))
+                appendLE(&central, UInt16(0), UInt16(0), UInt32(0o100644) << 16, offset)
+                central.append(name)
+            }
+            let cdOffset = UInt64(local.count)
+            let cdSize = UInt64(central.count)
+            let z64Offset = cdOffset + cdSize
+            var tail = Data()
+            appendLE(&tail, UInt32(0x0606_4b50), UInt64(44), UInt16(0x032D), UInt16(45), UInt32(0), UInt32(0))
+            appendLE(&tail, UInt64(count), UInt64(count), cdSize, cdOffset)
+            appendLE(&tail, UInt32(0x0706_4b50), UInt32(0), z64Offset, UInt32(1))
+            appendLE(
+                &tail, UInt32(0x0605_4b50), UInt16(0), UInt16(0), UInt16(0xFFFF), UInt16(0xFFFF), UInt32(cdSize),
+                UInt32(cdOffset), UInt16(0))
+            fm.createFile(atPath: zip100k.path, contents: nil)
+            let out = try FileHandle(forWritingTo: zip100k)
+            try out.write(contentsOf: local)
+            try out.write(contentsOf: central)
+            try out.write(contentsOf: tail)
+            try out.close()
+        }
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        let catalog = try ZipCatalog.read(from: zip100k)
+        let bigTree = Node.fromCatalog(catalog, workspaceRoot: dir)
+        bigTree.sort(by: .name, ascending: true)
+        let elapsed = clock.now - start
+
+        #expect(catalog.entries.count == 100_000)
+        #expect(bigTree.children.count == 100)
+        #expect(bigTree.size == 1_000_000)
+        #expect(bigTree.find("dir0")?.size == 10_000)
+        #expect(elapsed < .seconds(1), "100,000-entry catalog listing took \(elapsed)")
     }
 }

@@ -86,12 +86,25 @@ final class ArchiveDocument: NSDocument {
     }
     /// Archives opened from inside this one. Their files live in this workspace, so they close first.
     private let nestedDocuments = NSHashTable<ArchiveDocument>.weakObjects()
+    private static let openDocuments = NSHashTable<ArchiveDocument>.weakObjects()
     /// Where remembered passwords are kept; tests use a service of their own.
     var keychainService = Keychain.defaultService
     /// Original Central Directory catalog and per-inode file provenance for verbatim delta saves.
     private(set) var catalog: ZipCatalog?
     private(set) var trackedByInode: [UInt64: TrackedFile] = [:]
     private(set) var sourceSignature: SourceSignature?
+    private(set) var sourceHandle: FileHandle?
+    private(set) var sourceQuarantine: Data?
+    /// Entries from the source ZIP catalog that have not yet been unpacked onto disk, keyed by their
+    /// current archive path.
+    private(set) var unmaterialized: [String: ZipCatalog.Entry] = [:]
+    private(set) var unmaterializedFolders: [String: Date?] = [:]
+    private(set) var unmaterializedDirEntries: [String: ZipCatalog.Entry] = [:]
+    private var heldUnmaterialized: [String: [(suffix: String, entry: ZipCatalog.Entry)]] = [:]
+    private var heldUnmaterializedFolders: [String: [(suffix: String, modified: Date?, dirEntry: ZipCatalog.Entry?)]] =
+        [:]
+    private var materializingByPath: [String: Task<URL, Error>] = [:]
+    private(set) var materializationCounts: [String: Int] = [:]
 
     /// How far unpacking has got, from 0 to 1, or nil when the contents are ready.
     private(set) var loading: Double?
@@ -119,6 +132,12 @@ final class ArchiveDocument: NSDocument {
         let password: String?
         let compressionLevel: Settings.CompressionLevel
         let deltaPlan: DeltaPlan?
+        let unmaterialized: [String: ZipCatalog.Entry]
+        let unmaterializedFolders: [String: Date?]
+        let sourceURL: URL?
+        let sourceHandle: FileHandle?
+        let sourceQuarantine: Data?
+        let encoding: TextEncoding
         let onSaveLog: (@Sendable (String) -> Void)?
         let cancellation: Cancellation
     }
@@ -205,10 +224,15 @@ final class ArchiveDocument: NSDocument {
     }
 
     override func close() {
+        Self.openDocuments.remove(self)
         parentDocument = nil
         cancelLoading.cancel()
+        for task in materializingByPath.values { task.cancel() }
+        materializingByPath.removeAll()
         watcher?.stop()
         watcher = nil
+        try? sourceHandle?.close()
+        sourceHandle = nil
         workspace?.discard()
         workspace = nil
         super.close()
@@ -229,16 +253,49 @@ final class ArchiveDocument: NSDocument {
         }
     }
 
+    private enum UnpackOutcome: Sendable {
+        case catalog(Workspace, ZipCatalog, FileHandle?, Data?)
+        case extracted(Workspace, ExtractSummary, ZipCatalog?)
+    }
+
     private func unpack(_ url: URL, ofType typeName: String) async {
         let cancellation = cancelLoading
         let chosenEncoding = encoding
+        if !FileManager.default.fileExists(atPath: url.path) {
+            let stdURL = url.standardizedFileURL.path
+            for doc in Self.openDocuments.allObjects {
+                guard let ws = doc.workspace else { continue }
+                let prefix = ws.contents.standardizedFileURL.path + "/"
+                if stdURL.hasPrefix(prefix) {
+                    let relPath = String(stdURL.dropFirst(prefix.count))
+                    _ = try? await doc.materialize([relPath])
+                    break
+                }
+            }
+        }
         var password = self.password ?? Keychain.password(for: url, service: keychainService)
         var usedSavedKeychain = (self.password == nil && password != nil)
         var rememberEnteredInKeychain = false
         var keychainFailure: Error?
         while true {
             do {
-                let (workspace, summary, parsedCatalog) = try await Task.detached { [password] in
+                let outcome = try await Task.detached { [password] () throws -> UnpackOutcome in
+                    if typeName == Self.zipType, password == nil,
+                        let parsed = try? ZipCatalog.read(from: url, encoding: chosenEncoding),
+                        !parsed.isEncrypted
+                    {
+                        let maxEntries = 250_000
+                        if parsed.entries.count > maxEntries {
+                            throw ArchiveError.suspiciousArchive(
+                                "This archive contains more than \(maxEntries.formatted()) items and was stopped to protect against a decompression bomb."
+                            )
+                        }
+                        let workspace = try Workspace(lazy: true)
+                        let handle = try? FileHandle(forReadingFrom: url)
+                        let quarantine = Archive.quarantine(of: url)
+                        return .catalog(workspace, parsed, handle, quarantine)
+                    }
+
                     let workspace = try Workspace()
                     do {
                         let summary = try Archive.extract(
@@ -253,35 +310,53 @@ final class ArchiveDocument: NSDocument {
                             } else {
                                 nil
                             }
-                        return (workspace, summary, catalog)
+                        return .extracted(workspace, summary, catalog)
                     } catch {
                         workspace.discard()
                         throw error
                     }
                 }.value
-                guard !cancellation.isCancelled else { return workspace.discard() }
-                if summary.encrypted, rememberEnteredInKeychain, let password {
-                    do {
-                        try Keychain.setPassword(password, for: url, service: keychainService)
-                    } catch {
-                        keychainFailure = error
+                switch outcome {
+                case .catalog(let workspace, let parsedCatalog, let handle, let quarantine):
+                    guard !cancellation.isCancelled else {
+                        try? handle?.close()
+                        workspace.discard()
+                        return
                     }
+                    installCatalog(
+                        workspace,
+                        catalog: parsedCatalog,
+                        sourceURL: url,
+                        sourceHandle: handle,
+                        quarantine: quarantine
+                    )
+                    return
+
+                case .extracted(let workspace, let summary, let parsedCatalog):
+                    guard !cancellation.isCancelled else { return workspace.discard() }
+                    if summary.encrypted, rememberEnteredInKeychain, let password {
+                        do {
+                            try Keychain.setPassword(password, for: url, service: keychainService)
+                        } catch {
+                            keychainFailure = error
+                        }
+                    }
+                    install(
+                        workspace,
+                        password: summary.encrypted ? password : nil,
+                        catalog: parsedCatalog,
+                        sourceURL: typeName == Self.zipType ? url : nil
+                    )
+                    if typeName != Self.zipType {
+                        importedFrom = (url, Self.shortName(summary.format))
+                        fileURL = nil
+                        fileType = Self.zipType
+                        suggestedName = Naming.stem(of: url)
+                    }
+                    // After the contents are in, so the archive opens whether or not the password was kept.
+                    if let keychainFailure { reportKeychainFailure(keychainFailure) }
+                    return
                 }
-                install(
-                    workspace,
-                    password: summary.encrypted ? password : nil,
-                    catalog: parsedCatalog,
-                    sourceURL: typeName == Self.zipType ? url : nil
-                )
-                if typeName != Self.zipType {
-                    importedFrom = (url, Self.shortName(summary.format))
-                    fileURL = nil
-                    fileType = Self.zipType
-                    suggestedName = Naming.stem(of: url)
-                }
-                // After the contents are in, so the archive opens whether or not the password was kept.
-                if let keychainFailure { reportKeychainFailure(keychainFailure) }
-                return
             } catch let error as ArchiveError where error == .passwordRequired || error == .wrongPassword {
                 guard !cancellation.isCancelled else { return }
                 if usedSavedKeychain {
@@ -396,23 +471,56 @@ final class ArchiveDocument: NSDocument {
         completionHandler: @escaping (Error?) -> Void
     ) {
         guard let workspace else { return completionHandler(CocoaError(.fileWriteUnknown)) }
+        let canUseDelta: Bool = {
+            guard password == nil, catalog != nil, let expectedSig = sourceSignature else { return false }
+            if SourceSignature.of(expectedSig.url) != expectedSig {
+                Self.logSourceChangedFallback(for: expectedSig.url, notify: onSaveLog)
+                return false
+            }
+            return true
+        }()
+        if !canUseDelta, !unmaterialized.isEmpty || !unmaterializedFolders.isEmpty {
+            do {
+                try materializeAllSynchronously()
+            } catch {
+                return completionHandler(error)
+            }
+        }
+        if !heldUnmaterialized.isEmpty || !heldUnmaterializedFolders.isEmpty {
+            do {
+                try materializeHeldSynchronously()
+            } catch {
+                return completionHandler(error)
+            }
+        }
         // What the saved entries will be linked to once the save is done. Taken before the clone, so a
         // file changed while the save writes, or even while it clones, no longer matches its entry and
         // is compressed afresh next time. Read after the save, it would vouch for bytes never written.
-        let identities = password == nil ? FileIdentity.all(in: workspace.contents) : [:]
+        let identities =
+            (password == nil && workspace.isCreatedOnDisk) ? FileIdentity.all(in: workspace.contents) : [:]
         let snapshot: URL
         do {
-            snapshot = try workspace.snapshot()
+            if workspace.isCreatedOnDisk {
+                snapshot = try workspace.snapshot()
+            } else {
+                snapshot = workspace.folder.appendingPathComponent("Snapshot-\(UUID().uuidString)", isDirectory: true)
+            }
         } catch {
             return completionHandler(error)
         }
-        let delta = buildDeltaPlan(workspaceRoot: workspace.contents, snapshotRoot: snapshot)
+        let delta = canUseDelta ? buildDeltaPlan(workspaceRoot: workspace.contents, snapshotRoot: snapshot) : nil
         let cancellation = Cancellation()
         pendingSave.value = SaveJob(
             contents: snapshot,
             password: password,
             compressionLevel: Settings.shared.compressionLevel,
             deltaPlan: delta,
+            unmaterialized: unmaterialized,
+            unmaterializedFolders: unmaterializedFolders,
+            sourceURL: source ?? sourceSignature?.url,
+            sourceHandle: sourceHandle,
+            sourceQuarantine: sourceQuarantine,
+            encoding: encoding,
             onSaveLog: onSaveLog,
             cancellation: cancellation
         )
@@ -470,6 +578,7 @@ final class ArchiveDocument: NSDocument {
                     )
                 } else {
                     Self.logSourceChangedFallback(for: delta.sourceSignature.url, notify: job.onSaveLog)
+                    try Self.materializeIntoSnapshot(job)
                     try Archive.writeZip(
                         from: job.contents, to: url, password: job.password,
                         compressionLevel: job.compressionLevel,
@@ -477,6 +586,7 @@ final class ArchiveDocument: NSDocument {
                     )
                 }
             } else {
+                try Self.materializeIntoSnapshot(job)
                 try Archive.writeZip(
                     from: job.contents, to: url, password: job.password,
                     compressionLevel: job.compressionLevel,
@@ -486,6 +596,38 @@ final class ArchiveDocument: NSDocument {
         } catch ArchiveError.cancelled {
             // The one error AppKit never shows; the next autosave starts from the newer contents.
             throw CocoaError(.userCancelled)
+        }
+    }
+
+    nonisolated private static func materializeIntoSnapshot(_ job: SaveJob) throws {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: job.contents.path) {
+            try fm.createDirectory(at: job.contents, withIntermediateDirectories: true)
+        }
+        guard !job.unmaterialized.isEmpty || !job.unmaterializedFolders.isEmpty else { return }
+        for (folderPath, modified) in job.unmaterializedFolders {
+            let folderURL = job.contents.appendingPathComponent(folderPath, isDirectory: true)
+            if !fm.fileExists(atPath: folderURL.path) {
+                try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
+                if let modified {
+                    try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: folderURL.path)
+                }
+            }
+        }
+        guard let srcURL = job.sourceURL else { return }
+        for (path, entry) in job.unmaterialized {
+            let destURL = job.contents.appendingPathComponent(path)
+            if !fm.fileExists(atPath: destURL.path) {
+                try Archive.extractEntry(
+                    entry,
+                    from: srcURL,
+                    sourceHandle: job.sourceHandle,
+                    to: destURL,
+                    quarantineRoot: job.contents,
+                    quarantineMark: job.sourceQuarantine,
+                    encoding: job.encoding
+                )
+            }
         }
     }
 
@@ -501,12 +643,16 @@ final class ArchiveDocument: NSDocument {
 
     /// Checks whether a workspace file at `path` is still untouched since unpacking from the source ZIP.
     func verbatimEntry(forPath path: String) -> ZipCatalog.Entry? {
-        guard let workspace,
-            let current = FileIdentity.of(workspace.contents.appendingPathComponent(path)),
-            let tracked = trackedByInode[current.inode],
-            current == tracked.identity
-        else { return nil }
-        return tracked.entry
+        guard let workspace else { return nil }
+        let fileURL = workspace.contents.appendingPathComponent(path)
+        if workspace.isCreatedOnDisk, FileManager.default.fileExists(atPath: fileURL.path) {
+            guard let current = FileIdentity.of(fileURL),
+                let tracked = trackedByInode[current.inode],
+                current == tracked.identity
+            else { return nil }
+            return tracked.entry
+        }
+        return unmaterialized[path]
     }
 
     private func buildDeltaPlan(
@@ -521,21 +667,56 @@ final class ArchiveDocument: NSDocument {
             Self.logSourceChangedFallback(for: expectedSig.url, notify: onSaveLog)
             return nil
         }
-        guard let paths = try? Archive.contents(of: workspaceRoot) else { return nil }
+        let onDiskPaths: [String]
+        if workspace?.isCreatedOnDisk == true {
+            guard let scanned = try? Archive.contents(of: workspaceRoot) else { return nil }
+            onDiskPaths = scanned
+        } else {
+            onDiskPaths = []
+        }
+        let onDiskSet = Set(onDiskPaths)
 
-        var items: [ZipWriter.Item] = []
-        items.reserveCapacity(paths.count)
+        var keyedItems: [(path: String, item: ZipWriter.Item)] = []
+        keyedItems.reserveCapacity(onDiskPaths.count + unmaterialized.count)
 
-        for path in paths {
+        for path in onDiskPaths {
             let snapURL = snapshotRoot.appendingPathComponent(path)
             if let entry = verbatimEntry(forPath: path), !entry.isEncrypted {
                 let renamed = path == entry.path ? nil : path
-                items.append(.verbatim(entry, newPath: renamed))
+                keyedItems.append((path, .verbatim(entry, newPath: renamed)))
             } else {
-                items.append(.workspace(url: snapURL, path: path))
+                keyedItems.append((path, .workspace(url: snapURL, path: path)))
             }
         }
-        return DeltaPlan(items: items, sourceSignature: expectedSig, comment: catalog.comment)
+
+        for (path, entry) in unmaterialized where !onDiskSet.contains(path) && !entry.isEncrypted {
+            let renamed = path == entry.path ? nil : path
+            keyedItems.append((path, .verbatim(entry, newPath: renamed)))
+        }
+
+        for (folderPath, modified) in unmaterializedFolders where !onDiskSet.contains(folderPath) {
+            let prefix = folderPath + "/"
+            let hasDescendant =
+                onDiskPaths.contains(where: { $0.hasPrefix(prefix) })
+                || unmaterialized.keys.contains(where: { $0.hasPrefix(prefix) })
+                || unmaterializedFolders.keys.contains(where: { $0 != folderPath && $0.hasPrefix(prefix) })
+            guard !hasDescendant else { continue }
+            if let dirEntry = unmaterializedDirEntries[folderPath], !dirEntry.isEncrypted {
+                let targetDirPath = folderPath + "/"
+                let renamed = targetDirPath == dirEntry.path ? nil : targetDirPath
+                keyedItems.append((folderPath, .verbatim(dirEntry, newPath: renamed)))
+            } else {
+                let snapURL = snapshotRoot.appendingPathComponent(folderPath, isDirectory: true)
+                try? FileManager.default.createDirectory(at: snapURL, withIntermediateDirectories: true)
+                if let modified {
+                    try? FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: snapURL.path)
+                }
+                keyedItems.append((folderPath, .workspace(url: snapURL, path: folderPath)))
+            }
+        }
+
+        keyedItems.sort { $0.path.utf8.lexicographicallyPrecedes($1.path.utf8) }
+        return DeltaPlan(items: keyedItems.map(\.item), sourceSignature: expectedSig, comment: catalog.comment)
     }
 
     private func refreshTrackingAfterSave(
@@ -557,6 +738,8 @@ final class ArchiveDocument: NSDocument {
         guard let targetURL, let freshCatalog = try? ZipCatalog.read(from: targetURL, encoding: encoding) else {
             return
         }
+        try? sourceHandle?.close()
+        sourceHandle = try? FileHandle(forReadingFrom: targetURL)
         recordProvenance(catalog: freshCatalog, sourceURL: targetURL) { identities[$0] }
     }
 
@@ -571,11 +754,27 @@ final class ArchiveDocument: NSDocument {
         }
         sourceSignature = sig
         var map: [UInt64: TrackedFile] = [:]
-        for entry in catalog.entries where !entry.isDirectory && !entry.isSymlink {
-            guard let file = identity(entry.path) else { continue }
-            map[file.inode] = TrackedFile(entry: entry, identity: file)
+        var nextUnmaterialized: [String: ZipCatalog.Entry] = [:]
+        var nextDirEntries: [String: ZipCatalog.Entry] = [:]
+        for entry in catalog.entries {
+            if entry.isDirectory {
+                let dirPath = entry.path.hasSuffix("/") ? String(entry.path.dropLast()) : entry.path
+                if !dirPath.isEmpty {
+                    nextDirEntries[dirPath] = entry
+                }
+                continue
+            }
+            if let file = identity(entry.path) {
+                if !entry.isSymlink {
+                    map[file.inode] = TrackedFile(entry: entry, identity: file)
+                }
+            } else if unmaterialized[entry.path] != nil {
+                nextUnmaterialized[entry.path] = entry
+            }
         }
         trackedByInode = map
+        unmaterialized = nextUnmaterialized
+        unmaterializedDirEntries = nextDirEntries
     }
 
     private func saveProgressed(_ percent: Int, _ cancellation: Cancellation) {
@@ -648,17 +847,395 @@ final class ArchiveDocument: NSDocument {
     }
 
     private func install(_ workspace: Workspace, password: String?, catalog: ZipCatalog?, sourceURL: URL?) {
+        Self.openDocuments.add(self)
+        for task in materializingByPath.values { task.cancel() }
+        materializingByPath.removeAll()
         watcher?.stop()
+        watcher = nil
+        try? sourceHandle?.close()
+        sourceHandle = sourceURL.flatMap { try? FileHandle(forReadingFrom: $0) }
+        sourceQuarantine = sourceURL.flatMap { Archive.quarantine(of: $0) }
         self.workspace?.discard()
         self.workspace = workspace
         self.password = password
+        unmaterialized = [:]
+        unmaterializedFolders = [:]
+        unmaterializedDirEntries = [:]
+        heldUnmaterialized = [:]
+        heldUnmaterializedFolders = [:]
         loading = nil
         recordProvenance(catalog: catalog, sourceURL: sourceURL) {
             FileIdentity.of(workspace.contents.appendingPathComponent($0))
         }
-        watcher = FileWatcher(workspace.contents) { [weak self] in self?.contentsMayHaveChanged() }
+        if workspace.isCreatedOnDisk {
+            watcher = FileWatcher(workspace.contents) { [weak self] in self?.contentsMayHaveChanged() }
+        }
         undoManager?.removeAllActions()
         rescan()
+    }
+
+    private func installCatalog(
+        _ workspace: Workspace,
+        catalog: ZipCatalog,
+        sourceURL: URL,
+        sourceHandle: FileHandle?,
+        quarantine: Data?
+    ) {
+        Self.openDocuments.add(self)
+        for task in materializingByPath.values { task.cancel() }
+        materializingByPath.removeAll()
+        watcher?.stop()
+        watcher = nil
+        try? self.sourceHandle?.close()
+        self.sourceHandle = sourceHandle
+        self.sourceQuarantine = quarantine
+        self.workspace?.discard()
+        self.workspace = workspace
+        self.password = nil
+        self.catalog = catalog
+        self.sourceSignature = SourceSignature.of(sourceURL)
+        self.trackedByInode = [:]
+        self.heldUnmaterialized = [:]
+        self.heldUnmaterializedFolders = [:]
+
+        var entriesByPath: [String: ZipCatalog.Entry] = [:]
+        var foldersByPath: [String: Date?] = [:]
+        var dirEntriesByPath: [String: ZipCatalog.Entry] = [:]
+
+        for entry in catalog.entries {
+            guard let cleanPath = EntryPath.sanitized(entry.path) else { continue }
+            if entry.isDirectory {
+                foldersByPath[cleanPath] = entry.modified
+                dirEntriesByPath[cleanPath] = entry
+                var parent = (cleanPath as NSString).deletingLastPathComponent
+                while !parent.isEmpty && parent != "." {
+                    if foldersByPath[parent] == nil { foldersByPath[parent] = nil }
+                    parent = (parent as NSString).deletingLastPathComponent
+                }
+            } else {
+                entriesByPath[cleanPath] = entry
+                var parent = (cleanPath as NSString).deletingLastPathComponent
+                while !parent.isEmpty && parent != "." {
+                    if foldersByPath[parent] == nil { foldersByPath[parent] = nil }
+                    parent = (parent as NSString).deletingLastPathComponent
+                }
+            }
+        }
+
+        self.unmaterialized = entriesByPath
+        self.unmaterializedFolders = foldersByPath
+        self.unmaterializedDirEntries = dirEntriesByPath
+        loading = nil
+        undoManager?.removeAllActions()
+        rescan()
+    }
+
+    /// Ensures the given archive-relative `paths` (files or folders) are unpacked into the workspace
+    /// and returns their workspace URLs. Concurrent calls for the same entry coalesce onto a single
+    /// background extraction task.
+    @discardableResult
+    func materialize(
+        _ paths: [String],
+        progress: (@Sendable (Int64) -> Bool)? = nil
+    ) async throws -> [URL] {
+        guard let workspace else { throw CocoaError(.fileReadUnknown) }
+        var results: [URL] = []
+        results.reserveCapacity(paths.count)
+
+        for rawPath in paths {
+            let clean = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !clean.isEmpty else {
+                try workspace.ensureCreated()
+                ensureWatcherRunning()
+                results.append(workspace.contents)
+                continue
+            }
+
+            let prefix = clean + "/"
+            let childEntries = unmaterialized.keys.filter { $0.hasPrefix(prefix) }.sorted()
+            let childFolders = unmaterializedFolders.keys.filter { $0 == clean || $0.hasPrefix(prefix) }.sorted()
+
+            if !childFolders.isEmpty || !childEntries.isEmpty {
+                try workspace.ensureCreated()
+                ensureWatcherRunning()
+                let fm = FileManager.default
+                for folder in childFolders {
+                    let folderURL = workspace.url(folder)
+                    if !fm.fileExists(atPath: folderURL.path) {
+                        try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
+                        if let mod = unmaterializedFolders[folder] ?? nil {
+                            try? fm.setAttributes([.modificationDate: mod], ofItemAtPath: folderURL.path)
+                        }
+                        if let mark = sourceQuarantine {
+                            Archive.setQuarantine(mark, on: folderURL)
+                        }
+                    }
+                }
+                for childPath in childEntries {
+                    _ = try await materializeSingleEntry(childPath, progress: progress)
+                }
+                if unmaterialized[clean] != nil {
+                    _ = try await materializeSingleEntry(clean, progress: progress)
+                }
+                signature = Self.signature(of: tree)
+                results.append(workspace.url(clean))
+            } else if unmaterialized[clean] != nil {
+                let url = try await materializeSingleEntry(clean, progress: progress)
+                results.append(url)
+            } else {
+                results.append(workspace.url(clean))
+            }
+        }
+        return results
+    }
+
+    private func materializeSingleEntry(
+        _ path: String,
+        progress: (@Sendable (Int64) -> Bool)?
+    ) async throws -> URL {
+        guard let workspace else { throw CocoaError(.fileReadUnknown) }
+        if let existingTask = materializingByPath[path] {
+            return try await existingTask.value
+        }
+        guard let entry = unmaterialized[path] else {
+            return workspace.url(path)
+        }
+        guard let srcURL = source ?? sourceSignature?.url else {
+            throw ArchiveError.unreadable("Missing source archive.")
+        }
+        try workspace.ensureCreated()
+        ensureWatcherRunning()
+        materializationCounts[path, default: 0] += 1
+
+        let destURL = workspace.url(path)
+        let rootURL = workspace.contents
+        let handle = sourceHandle
+        let quarantine = sourceQuarantine
+        let chosenEncoding = encoding
+
+        let task = Task.detached { () throws -> URL in
+            try Archive.extractEntry(
+                entry,
+                from: srcURL,
+                sourceHandle: handle,
+                to: destURL,
+                quarantineRoot: rootURL,
+                quarantineMark: quarantine,
+                encoding: chosenEncoding,
+                progress: progress
+            )
+            return destURL
+        }
+        materializingByPath[path] = task
+        do {
+            let url = try await task.value
+            materializingByPath.removeValue(forKey: path)
+            if unmaterialized[path]?.localHeaderOffset == entry.localHeaderOffset {
+                unmaterialized.removeValue(forKey: path)
+            }
+            if !entry.isDirectory && !entry.isSymlink, let id = FileIdentity.of(url) {
+                trackedByInode[id.inode] = TrackedFile(entry: entry, identity: id)
+            }
+            signature = Self.signature(of: tree)
+            return url
+        } catch {
+            materializingByPath.removeValue(forKey: path)
+            throw error
+        }
+    }
+
+    func materializeAllSynchronously() throws {
+        guard let workspace else { return }
+        guard !unmaterialized.isEmpty || !unmaterializedFolders.isEmpty else { return }
+        try workspace.ensureCreated()
+        ensureWatcherRunning()
+        let fm = FileManager.default
+        for (folderPath, modified) in unmaterializedFolders {
+            let folderURL = workspace.url(folderPath)
+            if !fm.fileExists(atPath: folderURL.path) {
+                try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
+                if let modified {
+                    try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: folderURL.path)
+                }
+                if let mark = sourceQuarantine {
+                    Archive.setQuarantine(mark, on: folderURL)
+                }
+            }
+        }
+        if let srcURL = source ?? sourceSignature?.url {
+            for (path, entry) in unmaterialized {
+                let destURL = workspace.url(path)
+                if !fm.fileExists(atPath: destURL.path) {
+                    materializationCounts[path, default: 0] += 1
+                    try Archive.extractEntry(
+                        entry,
+                        from: srcURL,
+                        sourceHandle: sourceHandle,
+                        to: destURL,
+                        quarantineRoot: workspace.contents,
+                        quarantineMark: sourceQuarantine,
+                        encoding: encoding
+                    )
+                    if !entry.isDirectory && !entry.isSymlink, let id = FileIdentity.of(destURL) {
+                        trackedByInode[id.inode] = TrackedFile(entry: entry, identity: id)
+                    }
+                }
+            }
+        }
+        unmaterialized.removeAll()
+        signature = Self.signature(of: tree)
+    }
+
+    private func materializeHeldSynchronously() throws {
+        guard let workspace else { return }
+        guard !heldUnmaterialized.isEmpty || !heldUnmaterializedFolders.isEmpty else { return }
+        try workspace.ensureCreated()
+        let fm = FileManager.default
+        for (spotKey, folders) in heldUnmaterializedFolders {
+            for item in folders {
+                let targetURL = URL(fileURLWithPath: spotKey + item.suffix)
+                if !fm.fileExists(atPath: targetURL.path) {
+                    try fm.createDirectory(at: targetURL, withIntermediateDirectories: true)
+                    if let modified = item.modified {
+                        try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: targetURL.path)
+                    }
+                    if let mark = sourceQuarantine {
+                        Archive.setQuarantine(mark, on: targetURL)
+                    }
+                }
+            }
+        }
+        heldUnmaterializedFolders.removeAll()
+
+        if let srcURL = source ?? sourceSignature?.url {
+            for (spotKey, entries) in heldUnmaterialized {
+                let spotRoot = URL(fileURLWithPath: spotKey).deletingLastPathComponent()
+                for item in entries {
+                    let targetURL = URL(fileURLWithPath: spotKey + item.suffix)
+                    if !fm.fileExists(atPath: targetURL.path) {
+                        try Archive.extractEntry(
+                            item.entry,
+                            from: srcURL,
+                            sourceHandle: sourceHandle,
+                            to: targetURL,
+                            quarantineRoot: spotRoot,
+                            quarantineMark: sourceQuarantine,
+                            encoding: encoding
+                        )
+                    }
+                }
+            }
+        }
+        heldUnmaterialized.removeAll()
+    }
+
+    nonisolated static func extractPromisedItem(
+        fromWorkspaceURL source: URL,
+        to destination: URL,
+        progress: (@Sendable (Int64) -> Bool)? = nil
+    ) throws -> Bool {
+        let context:
+            (
+                entries: [(relSuffix: String, entry: ZipCatalog.Entry)],
+                folders: [(relSuffix: String, modified: Date?)],
+                srcURL: URL,
+                handle: FileHandle?,
+                quarantine: Data?,
+                encoding: TextEncoding
+            )? = onMain {
+                let stdURL = source.standardizedFileURL.path
+                for doc in Self.openDocuments.allObjects {
+                    guard let ws = doc.workspace else { continue }
+                    let prefix = ws.contents.standardizedFileURL.path + "/"
+                    guard stdURL.hasPrefix(prefix) else { continue }
+                    let relPath = String(stdURL.dropFirst(prefix.count))
+                    guard let srcURL = doc.source ?? doc.sourceSignature?.url else { continue }
+                    let childPrefix = relPath + "/"
+                    var entries: [(String, ZipCatalog.Entry)] = []
+                    for (k, v) in doc.unmaterialized {
+                        if k == relPath {
+                            entries.append(("", v))
+                        } else if k.hasPrefix(childPrefix) {
+                            entries.append((String(k.dropFirst(relPath.count)), v))
+                        }
+                    }
+                    var folders: [(String, Date?)] = []
+                    for (k, mod) in doc.unmaterializedFolders {
+                        if k == relPath {
+                            folders.append(("", mod))
+                        } else if k.hasPrefix(childPrefix) {
+                            folders.append((String(k.dropFirst(relPath.count)), mod))
+                        }
+                    }
+                    guard !entries.isEmpty || !folders.isEmpty else { return nil }
+                    entries.sort { $0.0.utf8.lexicographicallyPrecedes($1.0.utf8) }
+                    folders.sort { $0.0.utf8.lexicographicallyPrecedes($1.0.utf8) }
+                    return (entries, folders, srcURL, doc.sourceHandle, doc.sourceQuarantine, doc.encoding)
+                }
+                return nil
+            }
+        guard let context else { return false }
+        let fm = FileManager.default
+        let isFolder =
+            !context.folders.isEmpty
+            || context.entries.contains(where: { !$0.relSuffix.isEmpty })
+        let quarantineRoot = isFolder ? destination : destination.deletingLastPathComponent()
+
+        if isFolder {
+            try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            if let mark = context.quarantine {
+                Archive.setQuarantine(mark, on: destination)
+            }
+            for (suffix, modified) in context.folders where !suffix.isEmpty {
+                let sub = destination.appendingPathComponent(String(suffix.dropFirst()), isDirectory: true)
+                try fm.createDirectory(at: sub, withIntermediateDirectories: true)
+                if let modified {
+                    try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: sub.path)
+                }
+                if let mark = context.quarantine {
+                    Archive.setQuarantine(mark, on: sub)
+                }
+            }
+        }
+
+        var completedPrior: Int64 = 0
+        for (suffix, entry) in context.entries {
+            let target =
+                suffix.isEmpty
+                ? destination
+                : destination.appendingPathComponent(String(suffix.dropFirst()))
+            try Archive.extractEntry(
+                entry,
+                from: context.srcURL,
+                sourceHandle: context.handle,
+                to: target,
+                quarantineRoot: quarantineRoot,
+                quarantineMark: context.quarantine,
+                encoding: context.encoding
+            ) { currentEntryBytes in
+                guard let progress else { return true }
+                return progress(completedPrior + currentEntryBytes)
+            }
+            completedPrior += Int64(clamping: entry.uncompressedSize)
+        }
+        return true
+    }
+
+    private func ensureWatcherRunning() {
+        guard watcher == nil, let workspace, workspace.isCreatedOnDisk else { return }
+        watcher = FileWatcher(workspace.contents) { [weak self] in self?.contentsMayHaveChanged() }
+    }
+
+    func symlinkTarget(for node: Node) -> String? {
+        if let target = try? FileManager.default.destinationOfSymbolicLink(atPath: node.url.path) {
+            return target
+        }
+        guard let entry = unmaterialized[node.path], entry.isSymlink,
+            let srcURL = source ?? sourceSignature?.url
+        else {
+            return nil
+        }
+        return Archive.readSymlinkTarget(entry, from: srcURL, sourceHandle: sourceHandle)
     }
 
     /// "ZIP 2.0 (deflation)" says more than anyone wants in a subtitle.
@@ -783,6 +1360,9 @@ final class ArchiveDocument: NSDocument {
                 let format = ExportFormat.allCases[max(0, formatPopup.indexOfSelectedItem)]
                 let level = Settings.shared.compressionLevel
                 let currentPassword = self.password
+                if !self.unmaterialized.isEmpty || !self.unmaterializedFolders.isEmpty {
+                    try? self.materializeAllSynchronously()
+                }
                 guard let snapshot = try? workspace.snapshot() else { return }
                 self.report("Exporting…")
                 Task.detached {
@@ -810,14 +1390,22 @@ final class ArchiveDocument: NSDocument {
 
     private func rescan() {
         guard let workspace else { return }
-        tree = Node.scan(workspace.contents)
+        tree = Node.scan(
+            workspace.contents,
+            unmaterialized: unmaterialized,
+            unmaterializedFolders: unmaterializedFolders
+        )
         signature = Self.signature(of: tree)
         onChange?()
     }
 
     func childDidSave() {
         if let workspace {
-            let fresh = Node.scan(workspace.contents)
+            let fresh = Node.scan(
+                workspace.contents,
+                unmaterialized: unmaterialized,
+                unmaterializedFolders: unmaterializedFolders
+            )
             tree = fresh
             signature = Self.signature(of: fresh)
         }
@@ -829,8 +1417,12 @@ final class ArchiveDocument: NSDocument {
     /// An app that opened a file from the archive saved over it. That can't be undone here, but the
     /// document must count as edited so the change is saved.
     func contentsMayHaveChanged() {
-        guard let workspace else { return }
-        let fresh = Node.scan(workspace.contents)
+        guard let workspace, workspace.isCreatedOnDisk, materializingByPath.isEmpty else { return }
+        let fresh = Node.scan(
+            workspace.contents,
+            unmaterialized: unmaterialized,
+            unmaterializedFolders: unmaterializedFolders
+        )
         let freshSignature = Self.signature(of: fresh)
         guard freshSignature != signature else { return }
         tree = fresh
@@ -852,17 +1444,202 @@ final class ArchiveDocument: NSDocument {
         return result
     }
 
+    private func relativeArchivePath(of url: URL, in workspace: Workspace) -> String? {
+        let rootPath = workspace.contents.standardizedFileURL.path
+        let targetPath = url.standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard targetPath.hasPrefix(prefix) else { return nil }
+        let rel = String(targetPath.dropFirst(prefix.count))
+        return rel.isEmpty ? nil : rel
+    }
+
+    private func applyMove(_ move: Move, in workspace: Workspace) throws {
+        let fm = FileManager.default
+        let fromRel = relativeArchivePath(of: move.from, in: workspace)
+        let toRel = relativeArchivePath(of: move.to, in: workspace)
+
+        switch (fromRel, toRel) {
+        case (.some(let src), .some(let dst)):
+            if fm.fileExists(atPath: move.from.path) {
+                try fm.createDirectory(
+                    at: move.to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try move.perform()
+            }
+            moveUnmaterialized(from: src, to: dst)
+
+        case (.some(let src), .none):
+            let spotKey = move.to.standardizedFileURL.path
+            if fm.fileExists(atPath: move.from.path) {
+                try fm.createDirectory(
+                    at: move.to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try move.perform()
+            }
+            stashUnmaterialized(from: src, intoSpot: spotKey)
+
+        case (.none, .some(let dst)):
+            let spotKey = move.from.standardizedFileURL.path
+            if fm.fileExists(atPath: move.from.path) {
+                try workspace.ensureCreated()
+                ensureWatcherRunning()
+                try fm.createDirectory(
+                    at: move.to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try move.perform()
+            }
+            restoreUnmaterialized(fromSpot: spotKey, to: dst)
+
+        case (.none, .none):
+            try move.perform()
+        }
+    }
+
+    private func moveUnmaterialized(from src: String, to dst: String) {
+        let prefix = src + "/"
+        var movedEntries: [(oldKey: String, newKey: String, entry: ZipCatalog.Entry)] = []
+        for (key, entry) in unmaterialized {
+            if key == src {
+                movedEntries.append((key, dst, entry))
+            } else if key.hasPrefix(prefix) {
+                let suffix = String(key.dropFirst(src.count))
+                movedEntries.append((key, dst + suffix, entry))
+            }
+        }
+        for item in movedEntries { unmaterialized.removeValue(forKey: item.oldKey) }
+        for item in movedEntries { unmaterialized[item.newKey] = item.entry }
+
+        var movedFolders: [(oldKey: String, newKey: String, modified: Date?, dirEntry: ZipCatalog.Entry?)] = []
+        for (key, modified) in unmaterializedFolders {
+            if key == src {
+                movedFolders.append((key, dst, modified, unmaterializedDirEntries[key]))
+            } else if key.hasPrefix(prefix) {
+                let suffix = String(key.dropFirst(src.count))
+                movedFolders.append((key, dst + suffix, modified, unmaterializedDirEntries[key]))
+            }
+        }
+        for item in movedFolders {
+            unmaterializedFolders.removeValue(forKey: item.oldKey)
+            unmaterializedDirEntries.removeValue(forKey: item.oldKey)
+        }
+        for item in movedFolders {
+            unmaterializedFolders[item.newKey] = item.modified
+            if let dirEntry = item.dirEntry {
+                unmaterializedDirEntries[item.newKey] = dirEntry
+            }
+        }
+        var parent = (dst as NSString).deletingLastPathComponent
+        while !parent.isEmpty && parent != "." {
+            if unmaterializedFolders[parent] == nil { unmaterializedFolders[parent] = nil }
+            parent = (parent as NSString).deletingLastPathComponent
+        }
+    }
+
+    private func stashUnmaterialized(from src: String, intoSpot spotKey: String) {
+        let prefix = src + "/"
+        var stashedEntries: [(suffix: String, entry: ZipCatalog.Entry)] = []
+        for (key, entry) in unmaterialized {
+            if key == src {
+                stashedEntries.append(("", entry))
+            } else if key.hasPrefix(prefix) {
+                stashedEntries.append((String(key.dropFirst(src.count)), entry))
+            }
+        }
+        for item in stashedEntries {
+            unmaterialized.removeValue(forKey: src + item.suffix)
+        }
+        if !stashedEntries.isEmpty {
+            heldUnmaterialized[spotKey] = stashedEntries
+        }
+
+        var stashedFolders: [(suffix: String, modified: Date?, dirEntry: ZipCatalog.Entry?)] = []
+        for (key, modified) in unmaterializedFolders {
+            if key == src {
+                stashedFolders.append(("", modified, unmaterializedDirEntries[key]))
+            } else if key.hasPrefix(prefix) {
+                stashedFolders.append(
+                    (String(key.dropFirst(src.count)), modified, unmaterializedDirEntries[key]))
+            }
+        }
+        for item in stashedFolders {
+            let oldKey = src + item.suffix
+            unmaterializedFolders.removeValue(forKey: oldKey)
+            unmaterializedDirEntries.removeValue(forKey: oldKey)
+        }
+        if !stashedFolders.isEmpty {
+            heldUnmaterializedFolders[spotKey] = stashedFolders
+        }
+    }
+
+    private func restoreUnmaterialized(fromSpot spotKey: String, to dst: String) {
+        if let stashedEntries = heldUnmaterialized.removeValue(forKey: spotKey) {
+            for item in stashedEntries {
+                let key = dst + item.suffix
+                unmaterialized[key] = item.entry
+                var parent = (key as NSString).deletingLastPathComponent
+                while !parent.isEmpty && parent != "." {
+                    if unmaterializedFolders[parent] == nil { unmaterializedFolders[parent] = nil }
+                    parent = (parent as NSString).deletingLastPathComponent
+                }
+            }
+        }
+        if let stashedFolders = heldUnmaterializedFolders.removeValue(forKey: spotKey) {
+            for item in stashedFolders {
+                let key = dst + item.suffix
+                unmaterializedFolders[key] = item.modified
+                if let dirEntry = item.dirEntry {
+                    unmaterializedDirEntries[key] = dirEntry
+                }
+                var parent = (key as NSString).deletingLastPathComponent
+                while !parent.isEmpty && parent != "." {
+                    if unmaterializedFolders[parent] == nil { unmaterializedFolders[parent] = nil }
+                    parent = (parent as NSString).deletingLastPathComponent
+                }
+            }
+        }
+    }
+
+    private func takenNames(in folder: String, workspace: Workspace) -> Set<String> {
+        var names = Set<String>()
+        if workspace.isCreatedOnDisk {
+            if let onDisk = try? FileManager.default.contentsOfDirectory(atPath: workspace.url(folder).path) {
+                names.formUnion(onDisk)
+            }
+        }
+        let prefix = folder.isEmpty ? "" : folder + "/"
+        func collectChildName(from path: String) {
+            if folder.isEmpty {
+                if let first = path.split(separator: "/", maxSplits: 1).first {
+                    names.insert(String(first))
+                }
+            } else if path.hasPrefix(prefix) {
+                let rest = path.dropFirst(prefix.count)
+                if let first = rest.split(separator: "/", maxSplits: 1).first {
+                    names.insert(String(first))
+                }
+            }
+        }
+        for path in unmaterialized.keys { collectChildName(from: path) }
+        for path in unmaterializedFolders.keys { collectChildName(from: path) }
+        return names
+    }
+
+    private func isArchiveItemDirectory(path: String, in workspace: Workspace) -> Bool {
+        if isDirectory(workspace.url(path)) { return true }
+        if unmaterializedFolders[path] != nil { return true }
+        let prefix = path + "/"
+        return unmaterialized.keys.contains(where: { $0.hasPrefix(prefix) })
+    }
+
     /// Runs renames in order and registers the reverse for undo. If one fails, the ones already done
     /// are put back so the workspace is never left half changed.
     func perform(_ moves: [Move], named actionName: String) throws {
+        guard let workspace else { return }
         var done: [Move] = []
         do {
             for move in moves {
-                try move.perform()
+                try applyMove(move, in: workspace)
                 done.append(move)
             }
         } catch {
-            for move in done.reversed() { try? move.inverted.perform() }
+            for move in done.reversed() { try? applyMove(move.inverted, in: workspace) }
             rescan()
             throw error
         }
@@ -890,7 +1667,7 @@ final class ArchiveDocument: NSDocument {
         let fm = FileManager.default
         var plan: [(source: URL, name: String)] = []
         var replaced: [Move] = []
-        var taken = Set((try? fm.contentsOfDirectory(atPath: workspace.url(folder).path)) ?? [])
+        var taken = takenNames(in: folder, workspace: workspace)
         for url in urls {
             var name = url.lastPathComponent
             let destination = workspace.url(folder).appendingPathComponent(name)
@@ -900,7 +1677,11 @@ final class ArchiveDocument: NSDocument {
                 case .skip: continue
                 case .replace:
                     if url.standardizedFileURL == destination.standardizedFileURL { continue }
-                    replaced.append(Move(from: destination, to: try workspace.holdingSpot(for: name)))
+                    let spot =
+                        fm.fileExists(atPath: destination.path)
+                        ? try workspace.holdingSpot(for: name)
+                        : workspace.virtualHoldingSpot(for: name)
+                    replaced.append(Move(from: destination, to: spot))
                 case .keepBoth:
                     name = Naming.unique(name, isDirectory: isDirectory(url), taken: taken)
                 }
@@ -1044,8 +1825,15 @@ final class ArchiveDocument: NSDocument {
 
     func remove(_ paths: [String]) throws {
         guard let workspace else { return }
-        let moves = try paths.map {
-            Move(from: workspace.url($0), to: try workspace.holdingSpot(for: ($0 as NSString).lastPathComponent))
+        let fm = FileManager.default
+        let moves = try paths.map { path -> Move in
+            let src = workspace.url(path)
+            let name = (path as NSString).lastPathComponent
+            let spot =
+                fm.fileExists(atPath: src.path)
+                ? try workspace.holdingSpot(for: name)
+                : workspace.virtualHoldingSpot(for: name)
+            return Move(from: src, to: spot)
         }
         try perform(moves, named: paths.count == 1 ? "Delete Item" : "Delete Items")
         announce(
@@ -1062,14 +1850,15 @@ final class ArchiveDocument: NSDocument {
     /// Moves items into another folder of the archive, numbering names that collide.
     func move(_ paths: [String], into folder: String) throws {
         guard let workspace else { return }
-        var taken = Set((try? FileManager.default.contentsOfDirectory(atPath: workspace.url(folder).path)) ?? [])
+        var taken = takenNames(in: folder, workspace: workspace)
         var moves: [Move] = []
         // Into its own folder is no move, and into itself or below would lose it.
         for path in paths
         where (path as NSString).deletingLastPathComponent != folder && folder != path && !folder.hasPrefix(path + "/")
         {
             let source = workspace.url(path)
-            let name = Naming.unique(source.lastPathComponent, isDirectory: isDirectory(source), taken: taken)
+            let isDir = isArchiveItemDirectory(path: path, in: workspace)
+            let name = Naming.unique(source.lastPathComponent, isDirectory: isDir, taken: taken)
             taken.insert(name)
             moves.append(Move(from: source, to: workspace.url(folder).appendingPathComponent(name)))
         }
@@ -1080,7 +1869,7 @@ final class ArchiveDocument: NSDocument {
     /// Makes "untitled folder" inside `folder` and returns its path.
     func newFolder(in folder: String) throws -> String {
         guard let workspace else { throw CocoaError(.fileWriteUnknown) }
-        let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: workspace.url(folder).path)) ?? [])
+        let taken = takenNames(in: folder, workspace: workspace)
         let name = Naming.unique("untitled folder", isDirectory: true, taken: taken)
         let staged = try workspace.holdingSpot(for: name)
         try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: false)
