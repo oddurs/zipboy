@@ -33,8 +33,8 @@ struct UpdatesTests {
     @Test(arguments: [
         ("0.4.1", "0.4.0", true), ("0.4.0", "0.4.0", false), ("0.4.0", "0.4.1", false),
         ("0.10.0", "0.9.9", true), ("0.4.0", "0.4.0-rc.2", true), ("0.4.0-rc.2", "0.4.0-rc.1", true),
-        ("0.4.0-rc.1", "0.4.0", false), ("0.1.0", "0.1.0-rc.1-dev", true), ("0.1.0-rc.1", "0.1.0-rc.1-dev", false),
-        ("0.4.0", "0.4.0-dev", false),
+        ("0.4.0-rc.1", "0.4.0", false), ("0.1.0", "0.1.0-dev", true), ("0.4.0", "0.4.1-dev", false),
+        ("0.4.1", "0.4.1-dev", true), ("0.5.0", "0.4.1-dev", true),
     ])
     func comparesVersions(remote: String, local: String, newer: Bool) {
         #expect(Updates.isNewer(remote, than: local) == newer, "\(remote) vs \(local)")

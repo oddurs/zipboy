@@ -228,4 +228,68 @@ import ZipboyKit
             #expect(canExtract(sample, into: scratch.appendingPathComponent("ext-\(ext)")), ".\(ext) failed to extract")
         }
     }
+
+    @Test func stampsReleaseTagsAndNextDevVersionsWithCommitCount() throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZipboyVersionRepo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        func git(_ args: String...) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", repo.path] + args
+            process.environment = [
+                "GIT_AUTHOR_NAME": "Test",
+                "GIT_AUTHOR_EMAIL": "test@example.com",
+                "GIT_COMMITTER_NAME": "Test",
+                "GIT_COMMITTER_EMAIL": "test@example.com",
+            ]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            #expect(process.terminationStatus == 0)
+        }
+
+        func stamped() throws -> String {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = [Self.root.appendingPathComponent("scripts/task").path, "version", repo.path]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            try process.run()
+            process.waitUntilExit()
+            #expect(process.terminationStatus == 0)
+            return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        try git("init")
+        try git("commit", "--allow-empty", "-m", "chore: initial")
+        #expect(try stamped() == "0.1.0-dev 1")
+
+        try git("tag", "v0.1.0-rc.1")
+        #expect(try stamped() == "0.1.0-rc.1 1")
+
+        try git("commit", "--allow-empty", "-m", "feat: past rc")
+        #expect(try stamped() == "0.1.0-dev 2")
+
+        try git("tag", "v0.1.0")
+        #expect(try stamped() == "0.1.0 2")
+
+        try git("commit", "--allow-empty", "-m", "feat: past 0.1.0")
+        #expect(try stamped() == "0.1.1-dev 3")
+
+        try git("tag", "v0.2.0")
+        #expect(try stamped() == "0.2.0 3")
+
+        try git("commit", "--allow-empty", "-m", "feat: past 0.2.0")
+        #expect(try stamped() == "0.2.1-dev 4")
+
+        let task = try String(contentsOf: Self.root.appendingPathComponent("scripts/task"), encoding: .utf8)
+        #expect(task.contains("Set :CFBundleShortVersionString $short_ver"))
+        #expect(task.contains("Set :CFBundleVersion $build_num"))
+        #expect(try Self.source("AboutWindowController.swift").contains(#""Version \(short) (\(build))""#))
+    }
 }

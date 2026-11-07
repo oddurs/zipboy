@@ -37,7 +37,7 @@ A stranger downloads a notarized Zipboy, opens any common archive, previews it, 
 
 ## v0.2 — Saves in seconds
 
-`########··` 72% · 18 of 25 done · due 2026-12-18
+`########··` 76% · 19 of 25 done · due 2026-12-18
 
 Changing one file in a multi-gigabyte ZIP saves in seconds, because everything unchanged is copied byte for byte instead of being compressed again.
 
@@ -48,13 +48,13 @@ Changing one file in a multi-gigabyte ZIP saves in seconds, because everything u
 - [ ] `0020` Know which workspace files still match their archive entry <sup>feature · p0 · document</sup>
 - [ ] `0021` Save through ZipWriter so small changes to big archives save in seconds <sup>feature · p0 · document</sup>
 - [ ] `0022` Benchmarks with budgets for opening, listing, and saving <sup>feature · p1 · quality</sup>
-- [ ] `0024` Show the version and build from the release tag in About <sup>feature · p2 · shell</sup>
 - [ ] `0057` Read Deflate64 ZIPs, which Windows makes for large files <sup>feature · p2 · archive</sup>
 
 ### done
 
 - [x] `0017` Copy unchanged ZIP entries verbatim: our own writer, or libarchive? <sup>spike · p0 · archive</sup>
 - [x] `0023` Readable errors for every failure a user can hit <sup>feature · p1 · document</sup>
+- [x] `0024` Show the version and build from the release tag in About <sup>feature · p2 · shell</sup>
 - [x] `0059` Give Zipboy a look of its own <sup>feature · p1 · shell</sup>
 - [x] `0062` Draw the icon as a running manga Zipboy with speed streaks <sup>feature · p1 · shell</sup>
 - [x] `0063` Broaden supported compression types and harden archive durability <sup>feature · p1 · archive</sup>
