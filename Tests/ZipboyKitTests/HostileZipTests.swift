@@ -181,6 +181,148 @@ import zlib
         #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent("link-099.bin").path))
     }
 
+    @Test func stopsFortyTwoZipBeforeAGigabyte() throws {
+        // 42.zip: five nested layers of 16 ZIPs each (16^5 = 1,048,576 leaves), where the innermost
+        // archive holds 16 entries of 4.3 GB (0xFFFF_FFFF bytes) of compressed zeros each (~4.5 PB total).
+        let leafSize: UInt64 = 0xFFFF_FFFF
+        let leafPayload = DeflatedZeros.stream(mebibytes: 1)
+        let leafEntries = (0..<16).map { index in
+            CraftedZip.Entry(
+                name: String(format: "book %x.dll", index),
+                method: 8,
+                payload: leafPayload,
+                uncompressedSize: leafSize,
+                crc32: zeroCRC(leafSize)
+            )
+        }
+        var layerBytes = CraftedZip.bytes(leafEntries)
+        for layer in 1..<5 {
+            var deflatedLayer = Data()
+            var stream = z_stream()
+            deflateInit2_(
+                &stream, 9, Z_DEFLATED, -15, 9, Z_DEFAULT_STRATEGY, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+            var outBuf = [UInt8](repeating: 0, count: 65_536)
+            layerBytes.withUnsafeBytes { rawIn in
+                stream.next_in = UnsafeMutablePointer(mutating: rawIn.bindMemory(to: Bytef.self).baseAddress)
+                stream.avail_in = uInt(rawIn.count)
+                repeat {
+                    outBuf.withUnsafeMutableBufferPointer { rawOut in
+                        stream.next_out = rawOut.baseAddress
+                        stream.avail_out = uInt(rawOut.count)
+                        deflate(&stream, Z_FINISH)
+                        deflatedLayer.append(rawOut.baseAddress!, count: rawOut.count - Int(stream.avail_out))
+                    }
+                } while stream.avail_out == 0
+            }
+            deflateEnd(&stream)
+            let crc = UInt32(layerBytes.withUnsafeBytes { zlib.crc32(0, $0.baseAddress, uInt($0.count)) })
+            let prefix = layer == 4 ? "lib " : ""
+            let entries = (0..<16).map { index in
+                CraftedZip.Entry(
+                    name: String(format: "\(prefix)%x.zip", index),
+                    method: 8,
+                    payload: deflatedLayer,
+                    uncompressedSize: UInt64(layerBytes.count),
+                    crc32: crc
+                )
+            }
+            layerBytes = CraftedZip.bytes(entries)
+        }
+
+        let fortyTwo = try save(layerBytes, as: "42.zip")
+        var currentArchive = fortyTwo
+        var totalWritten: UInt64 = 0
+        var stoppedReason: String?
+        for depth in 0..<5 {
+            let stepOut = try folder("42-layer-\(depth)")
+            do {
+                _ = try Archive.extract(currentArchive, into: stepOut, capacity: { 1 << 40 })
+                totalWritten += try Archive.written(in: stepOut)
+                let children = try Archive.contents(of: stepOut).sorted()
+                guard let firstChild = children.first else { break }
+                currentArchive = stepOut.appendingPathComponent(firstChild)
+            } catch ArchiveError.suspiciousArchive(let reason) {
+                totalWritten += (try? Archive.written(in: stepOut)) ?? 0
+                stoppedReason = reason
+                break
+            }
+        }
+        #expect(stoppedReason?.contains("book 0.dll") == true)
+        #expect(stoppedReason?.contains("decompression bomb") == true)
+        #expect(totalWritten <= 1_000_000_000)
+    }
+
+    @Test func stopsEntriesWhoseDeclaredSizesDisagreeWithTheirData() throws {
+        let actual = Data(repeating: 0x41, count: 8192)
+        let crc = UInt32(actual.withUnsafeBytes { zlib.crc32(0, $0.baseAddress, uInt($0.count)) })
+        var deflated = Data()
+        var stream = z_stream()
+        deflateInit2_(
+            &stream, 9, Z_DEFLATED, -15, 9, Z_DEFAULT_STRATEGY, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+        var outBuf = [UInt8](repeating: 0, count: 16_384)
+        actual.withUnsafeBytes { rawIn in
+            stream.next_in = UnsafeMutablePointer(mutating: rawIn.bindMemory(to: Bytef.self).baseAddress)
+            stream.avail_in = uInt(rawIn.count)
+            repeat {
+                outBuf.withUnsafeMutableBufferPointer { rawOut in
+                    stream.next_out = rawOut.baseAddress
+                    stream.avail_out = uInt(rawOut.count)
+                    deflate(&stream, Z_FINISH)
+                    deflated.append(rawOut.baseAddress!, count: rawOut.count - Int(stream.avail_out))
+                }
+            } while stream.avail_out == 0
+        }
+        deflateEnd(&stream)
+
+        // 1. Deflate entry expands past its declared size (declared 100, actual 8192).
+        let overEntry = CraftedZip.Entry(
+            name: "over.bin", method: 8, payload: deflated, uncompressedSize: 100, crc32: crc)
+        let overZip = try save(CraftedZip.bytes([overEntry]), as: "over.zip")
+        let overReason = suspicion { _ = try Archive.extract(overZip, into: try folder("over")) }
+        #expect(overReason?.contains("declared size") == true)
+
+        // 2. Deflate entry ends short of its declared size (declared 65536, actual 8192).
+        let underEntry = CraftedZip.Entry(
+            name: "under.bin", method: 8, payload: deflated, uncompressedSize: 65_536, crc32: crc)
+        let underZip = try save(CraftedZip.bytes([underEntry]), as: "under.zip")
+        let underReason = suspicion { _ = try Archive.extract(underZip, into: try folder("under")) }
+        #expect(underReason?.contains("declared size") == true)
+
+        // 3. Local header and Central Directory disagree on uncompressed size (local 8192 vs CD 100).
+        var mismatchEntry = CraftedZip.Entry(
+            name: "mismatch.bin", method: 8, payload: deflated, uncompressedSize: 100, crc32: crc)
+        mismatchEntry.localUncompressed = 8192
+        let mismatchZip = try save(CraftedZip.bytes([mismatchEntry]), as: "mismatch.zip")
+        let mismatchReason = suspicion { _ = try Archive.extract(mismatchZip, into: try folder("mismatch")) }
+        #expect(mismatchReason?.contains("disagree") == true)
+
+        // 4. Deflate64 entry ends short of its declared size (declared 65536, actual 4096).
+        let d64Short = CraftedZip.Entry(
+            name: "short64.bin", method: Deflate64.method, payload: Deflate64Stream.zeros(4096),
+            uncompressedSize: 65_536, crc32: zeroCRC(4096))
+        let d64ShortZip = try save(CraftedZip.bytes([d64Short]), as: "d64-short.zip")
+        let d64ShortReason = suspicion { _ = try Archive.extract(d64ShortZip, into: try folder("d64-short")) }
+        #expect(d64ShortReason?.contains("declared") == true)
+
+        // 5. Deflate64 entry whose local header and Central Directory disagree on uncompressed size.
+        var d64Mismatch = CraftedZip.Entry(
+            name: "mismatch64.bin", method: Deflate64.method, payload: Deflate64Stream.zeros(4096),
+            uncompressedSize: 4096, crc32: zeroCRC(4096))
+        d64Mismatch.localUncompressed = 1024
+        let d64MismatchZip = try save(CraftedZip.bytes([d64Mismatch]), as: "d64-mismatch.zip")
+        let d64MismatchReason = suspicion {
+            _ = try Archive.extract(d64MismatchZip, into: try folder("d64-mismatch"))
+        }
+        #expect(d64MismatchReason?.contains("local header and central directory") == true)
+
+        // 6. Entry declaring a 64-bit size that overflows signed Int64.
+        let negativeEntry = CraftedZip.Entry(
+            name: "absurd.bin", method: 0, payload: Data("tiny".utf8), uncompressedSize: .max)
+        let negativeZip = try save(CraftedZip.bytes([negativeEntry]), as: "negative.zip")
+        let negativeReason = suspicion { _ = try Archive.extract(negativeZip, into: try folder("negative")) }
+        #expect(negativeReason?.contains("64-bit size") == true)
+    }
+
     // MARK: The Deflate64 fallback streams under the same guards
 
     @Test func stopsADeflate64EntryThatExpandsPastItsDeclaredSize() throws {
@@ -344,6 +486,8 @@ private enum CraftedZip {
         var centralOffset: UInt64?
         /// The compressed size the Central Directory claims, in place of the real one.
         var centralCompressed: UInt64?
+        /// The uncompressed size the Local File Header claims, when different from the Central Directory's.
+        var localUncompressed: UInt64?
 
         init(name: String, method: UInt16, payload: Data, uncompressedSize: UInt64? = nil, crc32: UInt32? = nil) {
             self.name = name
@@ -372,16 +516,19 @@ private enum CraftedZip {
         for entry in entries {
             let offset = UInt64(out.count)
             let compressed = UInt64(entry.payload.count)
+            let localUncomp = entry.localUncompressed ?? entry.uncompressedSize
+            let localZip64 = localUncomp >= wide || compressed >= wide
             let zip64 = entry.uncompressedSize >= wide || compressed >= wide
             let name = Data(entry.name.utf8)
 
             var localExtra = Data()
-            if zip64 {
+            if localZip64 {
                 localExtra.le(UInt16(1), UInt16(16))
-                localExtra.le(entry.uncompressedSize, compressed)
+                localExtra.le(localUncomp, compressed)
             }
-            out.le(UInt32(0x0403_4b50), UInt16(zip64 ? 45 : 20), UInt16(0), entry.method, UInt16(0), UInt16(0x21))
-            out.le(entry.crc32, UInt32(min(compressed, wide)), UInt32(min(entry.uncompressedSize, wide)))
+            out.le(
+                UInt32(0x0403_4b50), UInt16(localZip64 ? 45 : 20), UInt16(0), entry.method, UInt16(0), UInt16(0x21))
+            out.le(entry.crc32, UInt32(min(compressed, wide)), UInt32(min(localUncomp, wide)))
             out.le(UInt16(name.count), UInt16(localExtra.count))
             out.append(name)
             out.append(localExtra)
