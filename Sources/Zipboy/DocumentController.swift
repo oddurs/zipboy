@@ -24,4 +24,11 @@ final class DocumentController: NSDocumentController {
         if ZipMethod.archiveExtensions.contains(ext) { return "public.archive" }
         return try super.typeForContents(of: url)
     }
+
+    override func documentClass(forType typeName: String) -> AnyClass? {
+        if typeName == ArchiveDocument.zipType || typeName == "public.archive" {
+            return ArchiveDocument.self
+        }
+        return super.documentClass(forType: typeName)
+    }
 }

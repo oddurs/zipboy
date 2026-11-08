@@ -92,7 +92,7 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 
 ## v0.4 — Part of the Mac
 
-`#####·····` 50% · 10 of 20 done · due 2027-03-12
+`######····` 55% · 11 of 20 done · due 2027-03-12
 
 Zipboy works from the Finder as well as in its own window: Quick Look shows what's in an archive, Quick Actions compress and extract, updates arrive by themselves, and every flow works with VoiceOver and the keyboard alone.
 
@@ -100,7 +100,6 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 
 - [ ] `0031` Space in Finder shows what's inside an archive <sup>feature · p0 · system</sup>
 - [ ] `0032` Finder Quick Actions: Compress with Zipboy and Extract Here <sup>feature · p0 · system</sup>
-- [ ] `0036` Open an archive inside an archive in its own window <sup>feature · p2 · document</sup>
 - [ ] `0038` Offer once to open ZIPs with Zipboy <sup>feature · p2 · system</sup>
 - [ ] `0091` Move an archive to the Trash once it's extracted <sup>feature · p2 · shell</sup>
 - [ ] `0093` Open split archives from any of their pieces <sup>feature · p1 · archive</sup>
@@ -117,6 +116,7 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [x] `0030` Can SwiftPM and Command Line Tools build and sign a Quick Look extension? <sup>spike · p0 · system</sup>
 - [x] `0033` Auto-updates: Sparkle, or a release-feed check of our own? <sup>spike · p1 · distribution</sup>
 - [x] `0034` Updates arrive without the user doing anything <sup>feature · p1 · distribution</sup>
+- [x] `0036` Open an archive inside an archive in its own window <sup>feature · p2 · document</sup>
 - [x] `0037` Spring-loaded folders and a drop target on the empty window <sup>feature · p2 · browser</sup>
 - [x] `0039` Remember an archive's password in the Keychain, if asked <sup>feature · p3 · document</sup>
 - [x] `0066` Readable errors, hostile archive guards, Keychain passwords, spring-loaded folders, version stamping, and Help guide <sup>feature · p0 · archive</sup>

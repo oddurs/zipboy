@@ -3,10 +3,12 @@ id: 36
 uid: 52da07fe-8f5c-4ecd-a43f-ed84ff6ab388
 title: Open an archive inside an archive in its own window
 type: feature
-status: backlog
+status: done
 milestone: v0.4
+assignee: Oddur Sigurdsson
 created: 2026-10-20
-updated: 2026-11-01
+updated: 2026-11-07
+closed_at: 2026-11-07
 priority: p2
 effort: l
 area: document
@@ -22,7 +24,7 @@ Open nested archives as child documents. Saving the child writes it back into th
 
 ## Acceptance criteria
 
-- [ ] Double-clicking an inner archive opens it in Zipboy with a title showing both names
+- [x] Double-clicking an inner archive opens it in Zipboy with a title showing both names
 - [x] Changes saved in the child appear in the parent, which then autosaves
 - [x] Closing the parent first asks about, or saves, the child
 
@@ -33,3 +35,11 @@ Reconciled 2026-11-01 (0072) against the batch merged as 0063-0066. Nested archi
 ## 2026-11-01
 
 Updated after 0068-0071 merged (#25, #26, #28, #30). Criterion 3: closingAParentSavesTheNestedArchiveOpenFromItFirst.
+
+## 2026-11-07
+
+BrowserViewController.openNestedArchive opens nested archives in their own window linked via parentDocument, ArchiveWindowController.synchronizeWindowTitleWithDocumentName shows 'Inner.zip — Outer.zip', and saving the child writes back to the parent workspace.
+
+## Result
+
+Nested archives open in their own window with 'Child — Parent' title, write back into the parent on save, and warn before the parent closes if the child has unsaved changes.

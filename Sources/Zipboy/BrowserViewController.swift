@@ -415,19 +415,40 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         return false
     }
 
+    private(set) weak var lastOpenedNestedDocument: ArchiveDocument?
+
     func openNestedArchive(at url: URL) {
         let parent = document
-        NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { doc, _, error in
-            MainActor.assumeIsolated {
-                if let error {
-                    parent?.presentError(error)
-                    return
-                }
-                if let child = doc as? ArchiveDocument {
-                    child.parentDocument = parent
-                    child.windowControllers.first?.synchronizeWindowTitleWithDocumentName()
+        let ext = url.pathExtension.lowercased()
+        let typeName = ext == "zip" ? ArchiveDocument.zipType : "public.archive"
+        if NSDocumentController.shared.documentClass(forType: typeName) != nil {
+            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { [weak self] doc, _, error in
+                MainActor.assumeIsolated {
+                    if let error {
+                        parent?.presentError(error)
+                        return
+                    }
+                    if let child = doc as? ArchiveDocument {
+                        child.parentDocument = parent
+                        child.windowControllers.first?.synchronizeWindowTitleWithDocumentName()
+                        self?.lastOpenedNestedDocument = child
+                    }
                 }
             }
+            return
+        }
+        do {
+            let child = ArchiveDocument()
+            child.fileURL = url
+            child.fileType = typeName
+            child.parentDocument = parent
+            child.makeWindowControllers()
+            try child.read(from: url, ofType: typeName)
+            NSDocumentController.shared.addDocument(child)
+            child.windowControllers.first?.synchronizeWindowTitleWithDocumentName()
+            lastOpenedNestedDocument = child
+        } catch {
+            parent?.presentError(error)
         }
     }
 

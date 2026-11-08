@@ -525,13 +525,35 @@ import ZipboyKit
     }
 
     @Test func nestedArchiveTracksParentAndFinderServicesRoundTrip() async throws {
-        let parentDoc = try await document(["outer.txt": Data("outer".utf8)])
-        defer { parentDoc.close() }
-        let childDoc = try await document(["inner.txt": Data("inner".utf8)])
-        defer { childDoc.close() }
+        let innerSrc = dir.appendingPathComponent("inner-src")
+        try FileManager.default.createDirectory(at: innerSrc, withIntermediateDirectories: true)
+        try Data("inner".utf8).write(to: innerSrc.appendingPathComponent("inner.txt"))
+        let innerZip = dir.appendingPathComponent("Inner.zip")
+        try Archive.writeZip(from: innerSrc, to: innerZip)
 
-        childDoc.parentDocument = parentDoc
+        let parentDoc = try await document([
+            "outer.txt": Data("outer".utf8),
+            "Inner.zip": try Data(contentsOf: innerZip),
+        ])
+        defer { parentDoc.close() }
+        parentDoc.makeWindowControllers()
+        let parentWC = try #require(parentDoc.windowControllers.first as? ArchiveWindowController)
+        parentWC.browser.loadViewIfNeeded()
+        parentWC.browser.reload()
+        parentWC.browser.select(["Inner.zip"])
+        parentWC.browser.openItems(nil)
+
+        let childDoc = try #require(parentWC.browser.lastOpenedNestedDocument)
+        defer { childDoc.close() }
+        for _ in 0..<200 where childDoc.loading != nil || childDoc.tree == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(childDoc.parentDocument === parentDoc)
+        #expect(childDoc.displayName.contains("Inner"))
         #expect(childDoc.displayName.contains("—"))
+        #expect(childDoc.displayName.contains(parentDoc.displayName))
+        let childWindowTitle = try #require(childDoc.windowControllers.first?.window?.title)
+        #expect(childWindowTitle == childDoc.displayName)
         let childZip = try #require(childDoc.fileURL)
         #expect(try await save(childDoc, to: childZip, as: .saveOperation) == nil)
         #expect(parentDoc.isDocumentEdited)

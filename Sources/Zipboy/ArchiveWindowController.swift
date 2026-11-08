@@ -87,6 +87,14 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// Not `document`, which AppKit sets only after init, when the first refresh has already run.
     private var archive: ArchiveDocument? { browser.document }
 
+    override func synchronizeWindowTitleWithDocumentName() {
+        super.synchronizeWindowTitleWithDocumentName()
+        if let archive, archive.parentDocument != nil {
+            window?.representedURL = nil
+            window?.title = archive.displayName
+        }
+    }
+
     private func refresh() {
         browser.reload()
         updateStatus()
