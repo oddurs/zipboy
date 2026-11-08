@@ -12,6 +12,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     @preconcurrency QLPreviewPanelDelegate, NSFilePromiseProviderDelegate
 {
     weak var document: ArchiveDocument?
+    var settings: Settings = .shared
     var onSelectionChange: (([Node]) -> Void)?
 
     let outline = BrowserOutlineView()
@@ -519,15 +520,19 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         let paths = targetNodes.map(\.path)
         guard !urls.isEmpty else { return nil }
         let wrap: Bool =
-            switch Settings.shared.wrapExtractedFiles {
+            switch settings.wrapExtractedFiles {
             case .whenMultipleItems: whole && urls.count > 1
             case .always: whole
             case .never: false
             }
-        let revealInFinder = Settings.shared.revealExtractedInFinder
+        let revealInFinder = settings.revealExtractedInFinder
+        let activeSettings = settings
         let base = document?.source.map(Naming.stem) ?? "Archive"
         let sourceArchive = document?.source
         guard let document else { return nil }
+        let trashAfterExtract =
+            whole && activeSettings.afterExtract == .moveToTrash && !document.isDocumentEdited
+            && document.parentDocument == nil
         let totalBytes = max(FileCopy.size(of: urls), targetNodes.reduce(Int64(0)) { $0 + $1.size })
         let task = document.beginTask(
             whole
@@ -553,6 +558,13 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
                 if revealInFinder {
                     let shown = wrap ? [destination] : copied
                     await MainActor.run { self?.revealFiles(shown) }
+                }
+                if trashAfterExtract, let sourceArchive {
+                    await MainActor.run {
+                        guard !document.isDocumentEdited, document.parentDocument == nil else { return }
+                        document.close()
+                        try? activeSettings.trashItem(sourceArchive)
+                    }
                 }
             } catch {
                 // The folder made to hold everything goes too, so a stopped extract leaves no trace.
