@@ -292,4 +292,86 @@ import ZipboyKit
         #expect(!FileManager.default.fileExists(atPath: windowZip.path))
         #expect(trashed.map(\.standardizedFileURL) == [windowZip.standardizedFileURL])
     }
+
+    // MARK: Batch extract
+
+    @Test func batchExtractRunsFiveArchivesAsOneTaskCarriesOnPastFailureAndStopsNestedAtDepthLimit() throws {
+        let suiteName = "com.oddurs.zipboy.batch.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let settings = Settings(defaults: defaults)
+        settings.revealExtractedInFinder = false
+
+        // 1. Five archives run as one LongTask with one progress bar and one finish notice.
+        var fiveArchives: [URL] = []
+        for idx in 1...5 {
+            let url = dir.appendingPathComponent("batch-\(idx).zip")
+            try zip(["item-\(idx).txt": Data("content-\(idx)".utf8)], to: url)
+            fiveArchives.append(url)
+        }
+
+        let notifier = RecordingNotifier()
+        let watcher = TaskWatcher()
+        watcher.notifier = notifier
+        watcher.isFrontmost = { false }
+
+        let out1 = dir.appendingPathComponent("batch-out-1")
+        try FileManager.default.createDirectory(at: out1, withIntermediateDirectories: true)
+        let res1 = AppDelegate.extractBatch(
+            fiveArchives,
+            into: out1,
+            settings: settings,
+            watcher: watcher,
+            taskStarted: Date().addingTimeInterval(-3)
+        )
+        #expect(res1.outputs.count == 5)
+        #expect(res1.failures.isEmpty)
+        #expect(res1.task.progress.totalUnitCount == 500)
+        #expect(res1.task.progress.completedUnitCount == 500)
+        #expect(res1.task.progress.fractionCompleted == 1.0)
+        #expect(notifier.posted.count == 1)
+        #expect(notifier.posted.first?.0 == "Extracting 5 archives")
+        #expect(notifier.posted.first?.1 == "5 archives")
+
+        // 2. One damaged archive among five doesn't stop the other four, and the summary names it.
+        try Data("damaged bytes".utf8).write(to: fiveArchives[2])
+        let out2 = dir.appendingPathComponent("batch-out-2")
+        try FileManager.default.createDirectory(at: out2, withIntermediateDirectories: true)
+        let res2 = AppDelegate.extractBatch(
+            fiveArchives,
+            into: out2,
+            settings: settings,
+            watcher: watcher,
+            taskStarted: Date().addingTimeInterval(-3)
+        )
+        #expect(res2.outputs.count == 4)
+        #expect(res2.failures.count == 1)
+        #expect(res2.failures[0].url.lastPathComponent == "batch-3.zip")
+        let summary = try #require(res2.failureSummary)
+        #expect(summary.contains("batch-3.zip"))
+
+        // 3. Unpacking nested archives stops at Settings.maxNestedArchiveDepth with an archive holding itself.
+        let recursiveZip = dir.appendingPathComponent("self.zip")
+        try zip(["bottom.txt": Data("bottom".utf8)], to: recursiveZip)
+        for layer in 1...8 {
+            let stage = dir.appendingPathComponent("self-stage-\(layer)")
+            try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: recursiveZip, to: stage.appendingPathComponent("self.zip"))
+            try Data("layer-\(layer)".utf8).write(to: stage.appendingPathComponent("layer.txt"))
+            try Archive.writeZip(from: stage, to: recursiveZip)
+        }
+
+        settings.unpackNestedArchives = true
+        let out3 = dir.appendingPathComponent("batch-out-3")
+        try FileManager.default.createDirectory(at: out3, withIntermediateDirectories: true)
+        let res3 = AppDelegate.extractBatch([recursiveZip], into: out3, settings: settings)
+        #expect(res3.failures.isEmpty)
+        let subpaths = try FileManager.default.subpathsOfDirectory(atPath: out3.path)
+        #expect(!subpaths.contains { $0.hasSuffix("bottom.txt") })
+        #expect(subpaths.contains { $0.hasSuffix("self.zip") })
+        let remainingZip = try #require(subpaths.first { $0.hasSuffix("self.zip") })
+        let depthComponents = remainingZip.split(separator: "/").filter { $0 == "self" }
+        #expect(depthComponents.count == Settings.maxNestedArchiveDepth + 1)
+    }
 }

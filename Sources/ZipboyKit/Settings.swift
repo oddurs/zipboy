@@ -31,6 +31,9 @@ public final class Settings: @unchecked Sendable {
         case moveToTrash
     }
 
+    /// Maximum recursion depth when unpacking nested archives found inside an extracted archive.
+    public static let maxNestedArchiveDepth = 5
+
     /// Moves an extracted archive to the Trash. Overridable in tests so test runs don't leave temporary
     /// archives in the user's Trash.
     public var trashItem: @Sendable (URL) throws -> Void = { url in
@@ -52,6 +55,7 @@ public final class Settings: @unchecked Sendable {
         static let extractDestination = "extractDestination"
         static let wrapExtractedFiles = "wrapExtractedFiles"
         static let afterExtract = "afterExtract"
+        static let unpackNestedArchives = "unpackNestedArchives"
         static let revealExtractedInFinder = "revealExtractedInFinder"
         static let compressionLevel = "compressionLevel"
         static let launchCount = "launchCount"
@@ -67,6 +71,7 @@ public final class Settings: @unchecked Sendable {
             extractDestination,
             wrapExtractedFiles,
             afterExtract,
+            unpackNestedArchives,
             revealExtractedInFinder,
             compressionLevel,
             checksForUpdates,
@@ -82,6 +87,7 @@ public final class Settings: @unchecked Sendable {
             Key.extractDestination: ExtractDestination.archiveFolder.rawValue,
             Key.wrapExtractedFiles: WrapBehavior.whenMultipleItems.rawValue,
             Key.afterExtract: AfterExtractBehavior.keepArchive.rawValue,
+            Key.unpackNestedArchives: false,
             Key.revealExtractedInFinder: true,
             Key.compressionLevel: CompressionLevel.balanced.rawValue,
             Key.checksForUpdates: true,
@@ -166,6 +172,15 @@ public final class Settings: @unchecked Sendable {
         set {
             guard newValue != afterExtract else { return }
             defaults.set(newValue.rawValue, forKey: Key.afterExtract)
+            notify()
+        }
+    }
+
+    public var unpackNestedArchives: Bool {
+        get { defaults.bool(forKey: Key.unpackNestedArchives) }
+        set {
+            guard newValue != unpackNestedArchives else { return }
+            defaults.set(newValue, forKey: Key.unpackNestedArchives)
             notify()
         }
     }

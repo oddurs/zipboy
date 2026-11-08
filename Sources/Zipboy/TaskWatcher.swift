@@ -10,7 +10,7 @@ final class TaskWatcher: NSObject, UNUserNotificationCenterDelegate {
     /// Where finish notices go. Tests replace it; the system one needs a real app bundle.
     var notifier: any Notifier = SystemNotifier()
     /// Whether the person is looking at Zipboy, in which case its own window says it's done.
-    var isFrontmost: () -> Bool = { NSApp.isActive }
+    var isFrontmost: () -> Bool = { NSApp?.isActive == true }
 
     private var running: [LongTask] = []
     private var timer: Timer?
@@ -25,12 +25,16 @@ final class TaskWatcher: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func ended(_ task: LongTask, in document: ArchiveDocument) {
+        ended(task, archiveName: document.displayName ?? "Archive")
+    }
+
+    func ended(_ task: LongTask, archiveName: String) {
         running.removeAll { $0 === task }
         refresh()
         // Quick work, stopped work, and work watched from the window need no notice.
         guard !task.progress.isCancelled, Date().timeIntervalSince(task.started) >= 1, !isFrontmost() else { return }
         notifier.finished(
-            task.title.replacingOccurrences(of: "…", with: ""), archive: document.displayName ?? "Archive")
+            task.title.replacingOccurrences(of: "…", with: ""), archive: archiveName)
     }
 
     /// Combined across every task, so two at once show one bar.
@@ -101,7 +105,7 @@ final class DockTileProgress {
     private(set) var view: DockTileView?
 
     func show(_ fraction: Double?) {
-        let tile = NSApp.dockTile
+        let tile = (NSApp ?? NSApplication.shared).dockTile
         guard let fraction else {
             view = nil
             tile.contentView = nil
@@ -122,7 +126,7 @@ final class DockTileView: NSView {
     var fraction: Double = 0
 
     override func draw(_ dirtyRect: NSRect) {
-        NSApp.applicationIconImage?.draw(in: bounds)
+        NSApp?.applicationIconImage?.draw(in: bounds)
         let track = NSRect(
             x: bounds.width * 0.12, y: bounds.height * 0.1, width: bounds.width * 0.76, height: bounds.height * 0.09)
         let radius = track.height / 2

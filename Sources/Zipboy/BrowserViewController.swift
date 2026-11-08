@@ -409,7 +409,7 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
         }
     }
 
-    static func isNestedArchive(_ url: URL) -> Bool {
+    nonisolated static func isNestedArchive(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         if ZipMethod.archiveExtensions.contains(ext) { return true }
         if let type = UTType(filenameExtension: ext), type.conforms(to: .archive) { return true }

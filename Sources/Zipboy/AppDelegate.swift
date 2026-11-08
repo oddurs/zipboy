@@ -133,7 +133,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let urls =
             pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         guard !urls.isEmpty else { return }
-        runService { try Self.extractArchives(urls) }
+        Task.detached {
+            let result = Self.extractBatch(urls)
+            await MainActor.run {
+                if Settings.shared.revealExtractedInFinder, !result.outputs.isEmpty {
+                    NSWorkspace.shared.activateFileViewerSelecting(result.outputs)
+                }
+                if let summary = result.failureSummary {
+                    NSApp.activate()
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText =
+                        result.failures.count == 1
+                        ? "Couldn’t extract “\(result.failures[0].url.lastPathComponent)”."
+                        : "Couldn’t extract \(result.failures.count) archives."
+                    alert.informativeText = summary
+                    _ = alert.runModal()
+                }
+            }
+        }
     }
 
     /// The system waits for a service handler to return, and copying or unpacking a large selection takes
@@ -180,50 +198,202 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return output
     }
 
+    struct BatchExtractResult {
+        let outputs: [URL]
+        let failures: [(url: URL, error: Error)]
+        let task: LongTask
+
+        /// Summary naming each archive that failed and why, or nil when every archive succeeded.
+        var failureSummary: String? {
+            guard !failures.isEmpty else { return nil }
+            return failures.map { item in
+                let desc = ArchiveError.describe(item.error, fileName: item.url.lastPathComponent)
+                return "• \(item.url.lastPathComponent): \(desc.title) \(desc.message)"
+                    .trimmingCharacters(in: .whitespaces)
+            }.joined(separator: "\n")
+        }
+    }
+
     /// Extracts each archive in `urls` into `destinationFolder` (or beside each archive), honoring wrapping settings.
     nonisolated static func extractArchives(
         _ urls: [URL], into destinationFolder: URL? = nil, settings: Settings = .shared
     ) throws -> [URL] {
-        var results: [URL] = []
-        for archive in urls {
-            let folder = destinationFolder ?? archive.deletingLastPathComponent()
-            let staging = try Workspace()
-            defer { staging.discard() }
-            _ = try Archive.extract(archive, into: staging.contents)
-            let topItems = try FileManager.default.contentsOfDirectory(
-                at: staging.contents, includingPropertiesForKeys: nil
-            ).filter { !EntryPath.isJunk($0.lastPathComponent) }
-            guard !topItems.isEmpty else { continue }
+        let result = extractBatch(urls, into: destinationFolder, settings: settings)
+        if result.outputs.isEmpty, let first = result.failures.first {
+            throw first.error
+        }
+        return result.outputs
+    }
 
-            let wrap: Bool =
-                switch settings.wrapExtractedFiles {
-                case .whenMultipleItems: topItems.count > 1
-                case .always: true
-                case .never: false
-                }
-            var targetFolder = folder
-            if wrap {
-                let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
-                let folderName = Naming.unique(Naming.stem(of: archive), isDirectory: true, taken: taken)
-                targetFolder = folder.appendingPathComponent(folderName)
-                try FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: false)
-                Archive.copyQuarantine(from: archive, to: targetFolder)
-            }
-            var taken = Set((try? FileManager.default.contentsOfDirectory(atPath: targetFolder.path)) ?? [])
-            var moved: [URL] = []
-            for item in topItems {
-                let name = Naming.unique(item.lastPathComponent, isDirectory: isDirectory(item), taken: taken)
-                taken.insert(name)
-                let destination = targetFolder.appendingPathComponent(name)
-                try FileManager.default.moveItem(at: item, to: destination)
-                moved.append(destination)
-            }
-            results.append(contentsOf: wrap ? [targetFolder] : moved)
-            if settings.afterExtract == .moveToTrash {
-                try? settings.trashItem(archive)
+    /// Extracts `urls` as one combined `LongTask`, continuing past damaged archives and optionally
+    /// unpacking nested archives up to `Settings.maxNestedArchiveDepth`.
+    nonisolated static func extractBatch(
+        _ urls: [URL],
+        into destinationFolder: URL? = nil,
+        settings: Settings = .shared,
+        watcher: TaskWatcher? = nil,
+        taskStarted: Date = Date()
+    ) -> BatchExtractResult {
+        func onMainSync(_ block: @MainActor () -> Void) {
+            if Thread.isMainThread {
+                MainActor.assumeIsolated(block)
+            } else {
+                DispatchQueue.main.sync { MainActor.assumeIsolated(block) }
             }
         }
-        return results
+
+        let title =
+            urls.count == 1
+            ? "Extracting “\(urls[0].lastPathComponent)”…"
+            : "Extracting \(urls.count) archives…"
+        let archiveLabel = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) archives"
+        let totalUnits = Int64(max(1, urls.count) * 100)
+        let task = LongTask(title: title, total: totalUnits, started: taskStarted)
+        onMainSync {
+            let activeWatcher = watcher ?? TaskWatcher.shared
+            activeWatcher.began(task)
+            activeWatcher.refresh()
+        }
+
+        var results: [URL] = []
+        var failures: [(url: URL, error: Error)] = []
+
+        for (index, archive) in urls.enumerated() {
+            if task.progress.isCancelled { break }
+            let folder = destinationFolder ?? archive.deletingLastPathComponent()
+            let baseUnits = Int64(index * 100)
+            do {
+                var extracted = try unpackArchiveFile(
+                    archive,
+                    into: folder,
+                    settings: settings,
+                    deleteSource: false
+                ) { done in
+                    task.progress.completedUnitCount = baseUnits + Int64((done * 100).rounded())
+                    return !task.progress.isCancelled
+                }
+
+                if settings.unpackNestedArchives {
+                    var currentRoots = extracted
+                    var depth = 1
+                    while depth <= Settings.maxNestedArchiveDepth, !currentRoots.isEmpty, !task.progress.isCancelled {
+                        let nestedArchives = findNestedArchives(in: currentRoots)
+                        guard !nestedArchives.isEmpty else { break }
+                        var nextRoots: [URL] = []
+                        for nested in nestedArchives {
+                            if task.progress.isCancelled { break }
+                            if let unpacked = try? unpackArchiveFile(
+                                nested,
+                                into: nested.deletingLastPathComponent(),
+                                settings: settings,
+                                deleteSource: true,
+                                progress: { _ in !task.progress.isCancelled }
+                            ) {
+                                nextRoots.append(contentsOf: unpacked)
+                                if let topIdx = extracted.firstIndex(of: nested) {
+                                    extracted.replaceSubrange(topIdx...topIdx, with: unpacked)
+                                }
+                            }
+                        }
+                        currentRoots = nextRoots
+                        depth += 1
+                    }
+                }
+
+                results.append(contentsOf: extracted)
+                if settings.afterExtract == .moveToTrash {
+                    try? settings.trashItem(archive)
+                }
+            } catch {
+                failures.append((url: archive, error: error))
+            }
+            task.progress.completedUnitCount = Int64((index + 1) * 100)
+            onMainSync {
+                (watcher ?? TaskWatcher.shared).refresh()
+            }
+        }
+
+        onMainSync {
+            (watcher ?? TaskWatcher.shared).ended(task, archiveName: archiveLabel)
+        }
+        return BatchExtractResult(outputs: results, failures: failures, task: task)
+    }
+
+    private nonisolated static func unpackArchiveFile(
+        _ archive: URL,
+        into folder: URL,
+        settings: Settings,
+        deleteSource: Bool,
+        progress: @escaping (Double) -> Bool
+    ) throws -> [URL] {
+        let staging = try Workspace()
+        defer { staging.discard() }
+        _ = try Archive.extract(archive, into: staging.contents, progress: progress)
+        let topItems = try FileManager.default.contentsOfDirectory(
+            at: staging.contents, includingPropertiesForKeys: nil
+        ).filter { !EntryPath.isJunk($0.lastPathComponent) }
+        let quarantine = Archive.quarantine(of: archive)
+        if deleteSource {
+            try? FileManager.default.removeItem(at: archive)
+        }
+        guard !topItems.isEmpty else { return [] }
+
+        let wrap: Bool =
+            switch settings.wrapExtractedFiles {
+            case .whenMultipleItems: topItems.count > 1
+            case .always: true
+            case .never: false
+            }
+        var targetFolder = folder
+        if wrap {
+            let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            let folderName = Naming.unique(Naming.stem(of: archive), isDirectory: true, taken: taken)
+            targetFolder = folder.appendingPathComponent(folderName)
+            try FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: false)
+            if let quarantine {
+                Archive.setQuarantine(quarantine, on: targetFolder)
+            }
+        }
+        var taken = Set((try? FileManager.default.contentsOfDirectory(atPath: targetFolder.path)) ?? [])
+        var moved: [URL] = []
+        for item in topItems {
+            let name = Naming.unique(item.lastPathComponent, isDirectory: isDirectory(item), taken: taken)
+            taken.insert(name)
+            let destination = targetFolder.appendingPathComponent(name)
+            try FileManager.default.moveItem(at: item, to: destination)
+            moved.append(destination)
+        }
+        return wrap ? [targetFolder] : moved
+    }
+
+    private nonisolated static func findNestedArchives(in roots: [URL]) -> [URL] {
+        var found: [URL] = []
+        let fm = FileManager.default
+        for root in roots {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: root.path, isDirectory: &isDir) else { continue }
+            if !isDir.boolValue {
+                if BrowserViewController.isNestedArchive(root) {
+                    found.append(root)
+                }
+                continue
+            }
+            guard
+                let enumerator = fm.enumerator(
+                    at: root,
+                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                    options: [.skipsHiddenFiles]
+                )
+            else { continue }
+            for case let fileURL as URL in enumerator {
+                let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if values?.isSymbolicLink == true || values?.isDirectory == true { continue }
+                if BrowserViewController.isNestedArchive(fileURL) {
+                    found.append(fileURL)
+                }
+            }
+        }
+        return found
     }
 
     /// Archives open as usual. Anything else dropped on the Dock icon, or opened with the app, goes into

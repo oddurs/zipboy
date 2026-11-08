@@ -3,10 +3,12 @@ id: 95
 uid: 25f38bee-4862-4334-8b0f-c0099da4142d
 title: Extract many archives in one go
 type: feature
-status: backlog
+status: done
 milestone: v0.4
+assignee: Oddur Sigurdsson
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
+closed_at: 2026-11-07
 priority: p2
 effort: m
 area: shell
@@ -25,6 +27,14 @@ inside, one level deep at a time, bounded by the same bomb guards as any extract
 
 ## Acceptance criteria
 
-- [ ] Extracting five archives shows one progress bar and one finish notice, covered by a test on the task
-- [ ] One damaged archive among five doesn't stop the other four, and the summary names it
-- [ ] Unpacking nested archives stops at the depth limit, covered by a test with an archive that holds itself
+- [x] Extracting five archives shows one progress bar and one finish notice, covered by a test on the task
+- [x] One damaged archive among five doesn't stop the other four, and the summary names it
+- [x] Unpacking nested archives stops at the depth limit, covered by a test with an archive that holds itself
+
+## 2026-11-07
+
+AppDelegate.extractBatch and Scripting.extract run multiple archives as a single LongTask, continuing past damaged archives to report failures at the end, and optionally unpacking nested archives up to Settings.maxNestedArchiveDepth.
+
+## Result
+
+Multi-archive Extract Here and AppleScript extract run as one LongTask with a combined progress bar, failure summary, and depth-limited nested archive unpacking.

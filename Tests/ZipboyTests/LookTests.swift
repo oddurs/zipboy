@@ -211,6 +211,7 @@ import ZipboyKit
         #expect(controller.wrapPopup.indexOfSelectedItem == 0)
         #expect(controller.afterExtractPopup.indexOfSelectedItem == 0)
         #expect(controller.revealCheckbox.state == .on)
+        #expect(controller.unpackNestedCheckbox.state == .off)
         #expect(controller.compressionControl.selectedSegment == 1)
 
         settings.launchBehavior = .doNothing
@@ -219,6 +220,7 @@ import ZipboyKit
         settings.extractDestination = .downloads
         settings.wrapExtractedFiles = .never
         settings.afterExtract = .moveToTrash
+        settings.unpackNestedArchives = true
         settings.compressionLevel = .best
 
         #expect(controller.launchPopup.indexOfSelectedItem == 1)
@@ -227,6 +229,7 @@ import ZipboyKit
         #expect(controller.destinationPopup.indexOfSelectedItem == 1)
         #expect(controller.wrapPopup.indexOfSelectedItem == 2)
         #expect(controller.afterExtractPopup.indexOfSelectedItem == 1)
+        #expect(controller.unpackNestedCheckbox.state == .on)
         #expect(controller.compressionControl.selectedSegment == 2)
 
         controller.restoreDefaults(nil)
@@ -236,6 +239,7 @@ import ZipboyKit
         #expect(controller.destinationPopup.indexOfSelectedItem == 0)
         #expect(controller.wrapPopup.indexOfSelectedItem == 0)
         #expect(controller.afterExtractPopup.indexOfSelectedItem == 0)
+        #expect(controller.unpackNestedCheckbox.state == .off)
         #expect(controller.compressionControl.selectedSegment == 1)
 
         let menu = MainMenu.make()
