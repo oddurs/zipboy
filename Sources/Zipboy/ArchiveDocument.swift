@@ -262,14 +262,25 @@ final class ArchiveDocument: NSDocument {
     private func unpack(_ url: URL, ofType typeName: String) async {
         let cancellation = cancelLoading
         let chosenEncoding = encoding
-        if !FileManager.default.fileExists(atPath: url.path) {
+        if !FileManager.default.fileExists(atPath: url.path) || Archive.isSplitArchive(url) {
             let stdURL = url.standardizedFileURL.path
+            let targetStem = Naming.stem(of: url)
             for doc in Self.openDocuments.allObjects {
                 guard let ws = doc.workspace else { continue }
                 let prefix = ws.contents.standardizedFileURL.path + "/"
                 if stdURL.hasPrefix(prefix) {
                     let relPath = String(stdURL.dropFirst(prefix.count))
-                    _ = try? await doc.materialize([relPath])
+                    let parentDir = (relPath as NSString).deletingLastPathComponent
+                    var pathsToMaterialize = [relPath]
+                    for cand in doc.unmaterialized.keys
+                    where (cand as NSString).deletingLastPathComponent == parentDir && cand != relPath {
+                        if Naming.stem(of: URL(fileURLWithPath: cand)).caseInsensitiveCompare(targetStem)
+                            == .orderedSame
+                        {
+                            pathsToMaterialize.append(cand)
+                        }
+                    }
+                    _ = try? await doc.materialize(pathsToMaterialize)
                     break
                 }
             }
@@ -507,6 +518,7 @@ final class ArchiveDocument: NSDocument {
                 snapshot = try workspace.snapshot()
             } else {
                 snapshot = workspace.folder.appendingPathComponent("Snapshot-\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
             }
         } catch {
             return completionHandler(error)

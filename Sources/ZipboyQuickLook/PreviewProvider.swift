@@ -18,7 +18,14 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
             Self.log.error("can't list \(url.lastPathComponent, privacy: .private): \(error.localizedDescription)")
             throw error
         }
-        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
+        let fileSize: Int64?
+        if let split = try? Archive.resolveSplitPieces(for: url) {
+            fileSize = split.pieces.reduce(Int64(0)) { sum, piece in
+                sum + Int64((try? piece.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            }
+        } else {
+            fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
+        }
         let html = ArchivePreview.html(for: listing, name: url.lastPathComponent, fileSize: fileSize)
         // How long Finder waits, which has a budget: 300 ms for 10,000 entries.
         Self.log.notice("listed \(listing.entries.count) entries in \(started.duration(to: .now), privacy: .public)")

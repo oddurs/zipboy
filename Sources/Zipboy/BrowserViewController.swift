@@ -396,9 +396,16 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             if node.isDirectory {
                 outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
             } else if Self.isNestedArchive(node.url) {
-                if !FileManager.default.fileExists(atPath: node.url.path) {
-                    _ = try? document?.materializeSynchronously([node.path])
+                var pathsToMaterialize = [node.path]
+                let stem = Naming.stem(of: node.url)
+                if let siblings = node.parent?.children {
+                    for sib in siblings where !sib.isDirectory && sib.path != node.path {
+                        if Naming.stem(of: sib.url).caseInsensitiveCompare(stem) == .orderedSame {
+                            pathsToMaterialize.append(sib.path)
+                        }
+                    }
                 }
+                _ = try? document?.materializeSynchronously(pathsToMaterialize)
                 openNestedArchive(at: node.url)
             } else {
                 if !FileManager.default.fileExists(atPath: node.url.path) {
@@ -421,7 +428,9 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
     func openNestedArchive(at url: URL) {
         let parent = document
         let ext = url.pathExtension.lowercased()
-        let typeName = ext == "zip" ? ArchiveDocument.zipType : "public.archive"
+        let typeName =
+            (try? NSDocumentController.shared.typeForContents(of: url))
+            ?? (ext == "zip" && !Archive.isSplitArchive(url) ? ArchiveDocument.zipType : "public.archive")
         if NSDocumentController.shared.documentClass(forType: typeName) != nil {
             NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { [weak self] doc, _, error in
                 MainActor.assumeIsolated {

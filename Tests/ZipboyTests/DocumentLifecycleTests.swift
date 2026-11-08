@@ -20,7 +20,12 @@ import ZipboyKit
     func zip(_ files: [String: Data], to zip: URL) throws {
         let source = dir.appendingPathComponent("source-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
-        for (name, data) in files { try data.write(to: source.appendingPathComponent(name)) }
+        for (name, data) in files {
+            let dest = source.appendingPathComponent(name)
+            try FileManager.default.createDirectory(
+                at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: dest)
+        }
         try Archive.writeZip(from: source, to: zip)
     }
 
@@ -475,5 +480,26 @@ import ZipboyKit
         #expect(Set(trashed.map(\.lastPathComponent)) == ["split-zip.z01", "split-zip.zip"])
         #expect(!fm.fileExists(atPath: z01.path))
         #expect(!fm.fileExists(atPath: zipPart.path))
+
+        // 3. Opening a nested split archive inside a lazy-catalog parent materializes sibling pieces and opens read-only.
+        let outerZip = dir.appendingPathComponent("outer-with-split.zip")
+        try zip(
+            [
+                "nested/split-part.part1.rar": try Data(
+                    contentsOf: splitFixtureRoot.appendingPathComponent("split-part.part1.rar")),
+                "nested/split-part.part2.rar": try Data(
+                    contentsOf: splitFixtureRoot.appendingPathComponent("split-part.part2.rar")),
+            ],
+            to: outerZip
+        )
+        let outerDoc = try await open(outerZip)
+        defer { outerDoc.close() }
+        let part2Inside = try #require(outerDoc.tree?.find("nested/split-part.part2.rar"))
+        #expect(!fm.fileExists(atPath: part2Inside.url.path))
+        let childDoc = try await open(part2Inside.url, type: "public.archive")
+        defer { childDoc.close() }
+        #expect(childDoc.fileURL == nil)
+        #expect(childDoc.tree?.find("hello.txt") != nil)
+        #expect(childDoc.tree?.find("dir/world.txt") != nil)
     }
 }

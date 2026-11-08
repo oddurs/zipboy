@@ -429,13 +429,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         let controller = NSDocumentController.shared
         var loose: [URL] = []
-        for url in urls {
+        for item in Self.deduplicateArchives(urls) {
+            let url = item.entry
             if let type = try? controller.typeForContents(of: url), controller.documentClass(forType: type) != nil {
                 controller.openDocument(withContentsOf: url, display: true) { _, _, error in
                     if let error { controller.presentError(error) }
                 }
             } else {
-                loose.append(url)
+                loose.append(contentsOf: item.pieces)
             }
         }
         guard !loose.isEmpty else { return }
