@@ -86,13 +86,95 @@ public final class Node {
             size: 0,
             modified: nil
         )
-        root.mergeCatalog(
-            workspaceRoot: workspaceRoot,
-            entries: catalog.entries.lazy.map { (path: $0.path, entry: $0) },
-            extraFolders: [:],
-            checkExistingChildren: false
-        )
+        root.populateFromCatalog(catalog.entries, workspaceRoot: workspaceRoot)
         return root
+    }
+
+    private func populateFromCatalog(_ entries: [ZipCatalog.Entry], workspaceRoot: URL) {
+        var folders: [String: Node] = ["": self]
+        var createdFolders: [Node] = []
+
+        func ensureFolder(_ folderPath: String) -> Node {
+            if let existing = folders[folderPath] { return existing }
+            let (parentPath, folderName) = Self.splitLastSlash(folderPath)
+            let parentNode = ensureFolder(parentPath)
+            let folder = Node(
+                workspaceRoot: workspaceRoot,
+                name: folderName,
+                path: folderPath,
+                isDirectory: true,
+                isSymlink: false,
+                size: 0,
+                modified: nil
+            )
+            folder.parent = parentNode
+            parentNode.children.append(folder)
+            folders[folderPath] = folder
+            createdFolders.append(folder)
+            return folder
+        }
+
+        var lastParentPath = ""
+        var lastParentBytes: [UInt8] = []
+        var lastParentNode: Node = self
+
+        entries.withUnsafeBufferPointer { buf in
+            guard let entryBase = buf.baseAddress else { return }
+            let total = buf.count
+            var idx = 0
+            while idx < total {
+                let entry = entryBase[idx]
+                idx += 1
+                let path = entry.path
+                guard !path.isEmpty else { continue }
+                if entry.isDirectory {
+                    let folder = ensureFolder(path)
+                    if folder.modified == nil, let mod = entry.modified {
+                        folder.modified = mod
+                    }
+                    lastParentPath = path
+                    lastParentBytes = Array(path.utf8)
+                    lastParentNode = folder
+                    continue
+                }
+                let parentNode: Node
+                let leafName: String
+                if !lastParentBytes.isEmpty,
+                    let fastLeaf = Self.splitMatchingParent(path, expectedParent: lastParentBytes)
+                {
+                    parentNode = lastParentNode
+                    leafName = fastLeaf
+                } else {
+                    let (parentPath, leaf) = Self.splitLastSlash(path)
+                    leafName = leaf
+                    if parentPath == lastParentPath {
+                        parentNode = lastParentNode
+                    } else {
+                        parentNode = ensureFolder(parentPath)
+                        lastParentPath = parentPath
+                        lastParentBytes = Array(parentPath.utf8)
+                        lastParentNode = parentNode
+                    }
+                }
+                let childSize = Int64(clamping: entry.uncompressedSize)
+                let child = Node(
+                    workspaceRoot: workspaceRoot,
+                    name: leafName,
+                    path: path,
+                    isDirectory: false,
+                    isSymlink: entry.isSymlink,
+                    size: childSize,
+                    modified: entry.modified
+                )
+                child.parent = parentNode
+                parentNode.children.append(child)
+                parentNode.size += childSize
+            }
+        }
+
+        for folder in createdFolders.reversed() {
+            folder.parent?.size += folder.size
+        }
     }
 
     private static func splitLastSlash(_ path: String) -> (parent: String, leaf: String) {
@@ -111,6 +193,28 @@ public final class Node {
                 i -= 1
             }
             return ("", path)
+        }
+    }
+
+    private static func splitMatchingParent(_ path: String, expectedParent: [UInt8]) -> String? {
+        var copy = path
+        return copy.withUTF8 { buf -> String? in
+            let pCount = expectedParent.count
+            let n = buf.count
+            guard let base = buf.baseAddress, n > pCount + 1, base[pCount] == 0x2F else { return nil }
+            var i = n - 1
+            while i > pCount {
+                if base[i] == 0x2F { return nil }
+                i -= 1
+            }
+            let matched = expectedParent.withUnsafeBufferPointer { pBuf -> Bool in
+                guard let pBase = pBuf.baseAddress else { return false }
+                return memcmp(base, pBase, pCount) == 0
+            }
+            guard matched else { return nil }
+            return String(
+                decoding: UnsafeBufferPointer(start: base.advanced(by: pCount + 1), count: n - pCount - 1),
+                as: UTF8.self)
         }
     }
 
@@ -157,19 +261,42 @@ public final class Node {
             return folder
         }
 
+        var lastParentPath = ""
+        var lastParentBytes: [UInt8] = []
+        var lastParentNode: Node = self
+
         for (rawPath, entry) in entries {
-            let path = rawPath.hasSuffix("/") ? String(rawPath.dropLast()) : rawPath
+            let path = rawPath.utf8.last == 0x2F ? String(rawPath.dropLast()) : rawPath
             guard !path.isEmpty else { continue }
             if entry.isDirectory {
                 let folder = ensureFolder(path)
                 if folder.modified == nil, let mod = entry.modified {
                     folder.modified = mod
                 }
+                lastParentPath = path
+                lastParentBytes = Array(path.utf8)
+                lastParentNode = folder
                 continue
             }
             if checkExistingChildren, existingByPath.contains(path) { continue }
-            let (parentPath, leafName) = Self.splitLastSlash(path)
-            let parentNode = ensureFolder(parentPath)
+            let parentNode: Node
+            let leafName: String
+            if !lastParentBytes.isEmpty, let fastLeaf = Self.splitMatchingParent(path, expectedParent: lastParentBytes)
+            {
+                parentNode = lastParentNode
+                leafName = fastLeaf
+            } else {
+                let (parentPath, leaf) = Self.splitLastSlash(path)
+                leafName = leaf
+                if parentPath == lastParentPath {
+                    parentNode = lastParentNode
+                } else {
+                    parentNode = ensureFolder(parentPath)
+                    lastParentPath = parentPath
+                    lastParentBytes = Array(parentPath.utf8)
+                    lastParentNode = parentNode
+                }
+            }
             let child = Node(
                 workspaceRoot: workspaceRoot,
                 name: leafName,
