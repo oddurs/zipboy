@@ -873,6 +873,7 @@ final class ArchiveDocument: NSDocument {
             watcher = FileWatcher(workspace.contents) { [weak self] in self?.contentsMayHaveChanged() }
         }
         undoManager?.removeAllActions()
+        windowControllers.forEach { $0.synchronizeWindowTitleWithDocumentName() }
         rescan()
     }
 
@@ -929,6 +930,7 @@ final class ArchiveDocument: NSDocument {
         self.unmaterializedDirEntries = dirEntriesByPath
         loading = nil
         undoManager?.removeAllActions()
+        windowControllers.forEach { $0.synchronizeWindowTitleWithDocumentName() }
         rescan()
     }
 
