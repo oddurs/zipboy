@@ -242,12 +242,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        let batches = deduplicateArchives(urls)
         let title =
-            urls.count == 1
-            ? "Extracting “\(urls[0].lastPathComponent)”…"
-            : "Extracting \(urls.count) archives…"
-        let archiveLabel = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) archives"
-        let totalUnits = Int64(max(1, urls.count) * 100)
+            batches.count == 1
+            ? "Extracting “\(batches[0].entry.lastPathComponent)”…"
+            : "Extracting \(batches.count) archives…"
+        let archiveLabel = batches.count == 1 ? batches[0].entry.lastPathComponent : "\(batches.count) archives"
+        let totalUnits = Int64(max(1, batches.count) * 100)
         let task = LongTask(title: title, total: totalUnits, started: taskStarted)
         onMainSync {
             let activeWatcher = watcher ?? TaskWatcher.shared
@@ -258,13 +259,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var results: [URL] = []
         var failures: [(url: URL, error: Error)] = []
 
-        for (index, archive) in urls.enumerated() {
+        for (index, item) in batches.enumerated() {
             if task.progress.isCancelled { break }
+            let archive = item.entry
             let folder = destinationFolder ?? archive.deletingLastPathComponent()
             let baseUnits = Int64(index * 100)
             do {
                 var extracted = try unpackArchiveFile(
                     archive,
+                    pieces: item.pieces,
                     into: folder,
                     settings: settings,
                     deleteSource: false
@@ -277,21 +280,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     var currentRoots = extracted
                     var depth = 1
                     while depth <= Settings.maxNestedArchiveDepth, !currentRoots.isEmpty, !task.progress.isCancelled {
-                        let nestedArchives = findNestedArchives(in: currentRoots)
+                        let nestedArchives = deduplicateArchives(findNestedArchives(in: currentRoots))
                         guard !nestedArchives.isEmpty else { break }
                         var nextRoots: [URL] = []
                         for nested in nestedArchives {
                             if task.progress.isCancelled { break }
                             if let unpacked = try? unpackArchiveFile(
-                                nested,
-                                into: nested.deletingLastPathComponent(),
+                                nested.entry,
+                                pieces: nested.pieces,
+                                into: nested.entry.deletingLastPathComponent(),
                                 settings: settings,
                                 deleteSource: true,
                                 progress: { _ in !task.progress.isCancelled }
                             ) {
                                 nextRoots.append(contentsOf: unpacked)
-                                if let topIdx = extracted.firstIndex(of: nested) {
-                                    extracted.replaceSubrange(topIdx...topIdx, with: unpacked)
+                                let piecePaths = Set(nested.pieces.map { $0.standardizedFileURL.path })
+                                if let topIdx = extracted.firstIndex(where: {
+                                    piecePaths.contains($0.standardizedFileURL.path)
+                                }) {
+                                    extracted.removeAll { piecePaths.contains($0.standardizedFileURL.path) }
+                                    extracted.insert(contentsOf: unpacked, at: min(topIdx, extracted.count))
                                 }
                             }
                         }
@@ -302,7 +310,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 results.append(contentsOf: extracted)
                 if settings.afterExtract == .moveToTrash {
-                    try? settings.trashItem(archive)
+                    for piece in item.pieces {
+                        try? settings.trashItem(piece)
+                    }
                 }
             } catch {
                 failures.append((url: archive, error: error))
@@ -319,8 +329,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return BatchExtractResult(outputs: results, failures: failures, task: task)
     }
 
+    private nonisolated static func deduplicateArchives(_ urls: [URL]) -> [(entry: URL, pieces: [URL])] {
+        var seen = Set<String>()
+        var batches: [(entry: URL, pieces: [URL])] = []
+        for url in urls {
+            let key = url.standardizedFileURL.path
+            if seen.contains(key) { continue }
+            let pieces = (try? Archive.resolveSplitPieces(for: url)?.pieces) ?? [url]
+            for piece in pieces {
+                seen.insert(piece.standardizedFileURL.path)
+            }
+            batches.append((entry: url, pieces: pieces))
+        }
+        return batches
+    }
+
     private nonisolated static func unpackArchiveFile(
         _ archive: URL,
+        pieces: [URL],
         into folder: URL,
         settings: Settings,
         deleteSource: Bool,
@@ -334,7 +360,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ).filter { !EntryPath.isJunk($0.lastPathComponent) }
         let quarantine = Archive.quarantine(of: archive)
         if deleteSource {
-            try? FileManager.default.removeItem(at: archive)
+            for piece in pieces {
+                try? FileManager.default.removeItem(at: piece)
+            }
         }
         guard !topItems.isEmpty else { return [] }
 

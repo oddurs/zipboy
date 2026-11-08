@@ -545,7 +545,10 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
             defer { Task { @MainActor in document.endTask(task) } }
             var destination = folder
             do {
-                _ = try await document.materialize(paths) { _ in !progress.isCancelled }
+                _ = try await document.materialize(paths) { bytes in
+                    progress.completedUnitCount = min(totalBytes, bytes)
+                    return !progress.isCancelled
+                }
                 if wrap {
                     let taken = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
                     destination = folder.appendingPathComponent(Naming.unique(base, isDirectory: true, taken: taken))
@@ -560,10 +563,13 @@ final class BrowserViewController: NSViewController, NSOutlineViewDataSource, NS
                     await MainActor.run { self?.revealFiles(shown) }
                 }
                 if trashAfterExtract, let sourceArchive {
+                    let pieces = (try? Archive.resolveSplitPieces(for: sourceArchive)?.pieces) ?? [sourceArchive]
                     await MainActor.run {
                         guard !document.isDocumentEdited, document.parentDocument == nil else { return }
                         document.close()
-                        try? activeSettings.trashItem(sourceArchive)
+                        for piece in pieces {
+                            try? activeSettings.trashItem(piece)
+                        }
                     }
                 }
             } catch {

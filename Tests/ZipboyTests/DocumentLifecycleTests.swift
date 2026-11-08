@@ -422,4 +422,58 @@ import ZipboyKit
             }
         }
     }
+
+    @Test func splitArchivesDeduplicateInBatchAndTrashAllPiecesAfterExtract() async throws {
+        let fm = FileManager.default
+        let splitFixtureRoot = BundleTests.root.appendingPathComponent("Tests/ZipboyKitTests/Fixtures/split")
+        let suiteName = "ZipboyTests.SplitAfterExtract.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = Settings(defaults: defaults)
+        settings.afterExtract = .moveToTrash
+        settings.revealExtractedInFinder = false
+        nonisolated(unsafe) var trashed: [URL] = []
+        settings.trashItem = { url in
+            trashed.append(url)
+            try FileManager.default.removeItem(at: url)
+        }
+
+        // 1. Passing all pieces of a split archive to extractBatch extracts once and trashes all pieces.
+        let batchFolder = dir.appendingPathComponent("batch-split")
+        try fm.createDirectory(at: batchFolder, withIntermediateDirectories: true)
+        let part1 = batchFolder.appendingPathComponent("split-part.part1.rar")
+        let part2 = batchFolder.appendingPathComponent("split-part.part2.rar")
+        try fm.copyItem(at: splitFixtureRoot.appendingPathComponent("split-part.part1.rar"), to: part1)
+        try fm.copyItem(at: splitFixtureRoot.appendingPathComponent("split-part.part2.rar"), to: part2)
+
+        let outBatch = dir.appendingPathComponent("batch-split-out")
+        try fm.createDirectory(at: outBatch, withIntermediateDirectories: true)
+        let batchRes = AppDelegate.extractBatch([part1, part2], into: outBatch, settings: settings)
+        #expect(batchRes.failures.isEmpty)
+        #expect(batchRes.outputs.count == 1)
+        #expect(batchRes.outputs[0].lastPathComponent == "split-part")
+        #expect(Set(trashed.map(\.lastPathComponent)) == ["split-part.part1.rar", "split-part.part2.rar"])
+        #expect(!fm.fileExists(atPath: part1.path))
+        #expect(!fm.fileExists(atPath: part2.path))
+
+        // 2. Whole-archive extract from BrowserViewController on a split archive trashes all pieces.
+        trashed.removeAll()
+        let browserFolder = dir.appendingPathComponent("browser-split")
+        try fm.createDirectory(at: browserFolder, withIntermediateDirectories: true)
+        let z01 = browserFolder.appendingPathComponent("split-zip.z01")
+        let zipPart = browserFolder.appendingPathComponent("split-zip.zip")
+        try fm.copyItem(at: splitFixtureRoot.appendingPathComponent("split-zip.z01"), to: z01)
+        try fm.copyItem(at: splitFixtureRoot.appendingPathComponent("split-zip.zip"), to: zipPart)
+
+        let doc = try await open(z01, type: "public.archive")
+        doc.makeWindowControllers()
+        let browser = try #require((doc.windowControllers.first as? ArchiveWindowController)?.browser)
+        browser.settings = settings
+        let outBrowser = dir.appendingPathComponent("browser-split-out")
+        try fm.createDirectory(at: outBrowser, withIntermediateDirectories: true)
+        await browser.extract(into: outBrowser, items: [])?.value
+        #expect(Set(trashed.map(\.lastPathComponent)) == ["split-zip.z01", "split-zip.zip"])
+        #expect(!fm.fileExists(atPath: z01.path))
+        #expect(!fm.fileExists(atPath: zipPart.path))
+    }
 }
