@@ -11,8 +11,16 @@ enum Scripting {
     }
 
     nonisolated static func extract(_ archive: URL, to folder: URL?) throws -> [URL] {
-        try require([archive] + [folder].compactMap { $0 })
-        return try AppDelegate.extractArchives([archive], into: folder)
+        try extract([archive], to: folder)
+    }
+
+    nonisolated static func extract(_ archives: [URL], to folder: URL?) throws -> [URL] {
+        try require(archives + [folder].compactMap { $0 })
+        let result = AppDelegate.extractBatch(archives, into: folder)
+        if let summary = result.failureSummary, result.outputs.isEmpty {
+            throw result.failures.count == 1 ? result.failures[0].error : ArchiveError.unreadable(summary)
+        }
+        return result.outputs
     }
 
     nonisolated static func compress(_ files: [URL], into folder: URL?) throws -> URL {
@@ -71,13 +79,14 @@ private struct UncheckedBox<Value>: @unchecked Sendable {
 @objc(ZipboyExtractCommand)
 final class ExtractCommand: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
-        guard let archive = Scripting.urls(from: directParameter).first else {
+        let archives = Scripting.urls(from: directParameter)
+        guard !archives.isEmpty else {
             scriptErrorNumber = -1708
             scriptErrorString = "Say which archive to extract."
             return nil
         }
         let folder = evaluatedArguments?["Destination"] as? URL
-        return runSuspended(self) { try Scripting.extract(archive, to: folder) as [URL] as NSArray }
+        return runSuspended(self) { try Scripting.extract(archives, to: folder) as [URL] as NSArray }
     }
 }
 

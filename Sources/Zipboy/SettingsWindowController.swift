@@ -22,6 +22,8 @@ final class SettingsWindowController: NSWindowController {
     let afterExtractPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let revealCheckbox = NSButton(
         checkboxWithTitle: "Show extracted files in Finder", target: nil, action: nil)
+    let unpackNestedCheckbox = NSButton(
+        checkboxWithTitle: "Unpack archives found inside", target: nil, action: nil)
     let updatesCheckbox = NSButton(
         checkboxWithTitle: "Check for updates automatically", target: nil, action: nil)
     let compressionControl = NSSegmentedControl(
@@ -72,7 +74,10 @@ final class SettingsWindowController: NSWindowController {
         launchPopup.target = self
         launchPopup.action = #selector(launchChanged(_:))
 
-        for button in [foldersFirstCheckbox, autoExpandCheckbox, showHiddenCheckbox, revealCheckbox, updatesCheckbox] {
+        for button in [
+            foldersFirstCheckbox, autoExpandCheckbox, showHiddenCheckbox, revealCheckbox, unpackNestedCheckbox,
+            updatesCheckbox,
+        ] {
             button.target = self
             button.action = #selector(checkboxChanged(_:))
             button.font = .systemFont(ofSize: 13)
@@ -141,6 +146,14 @@ final class SettingsWindowController: NSWindowController {
         browsingStack.alignment = .leading
         browsingStack.spacing = 8
 
+        let extractOptionsStack = NSStackView(views: [
+            revealCheckbox,
+            unpackNestedCheckbox,
+        ])
+        extractOptionsStack.orientation = .vertical
+        extractOptionsStack.alignment = .leading
+        extractOptionsStack.spacing = 8
+
         let compressionStack = NSStackView(views: [compressionControl, compressionCaption])
         compressionStack.orientation = .vertical
         compressionStack.alignment = .leading
@@ -161,7 +174,7 @@ final class SettingsWindowController: NSWindowController {
             [Self.label("Extract To:"), destinationPopup],
             [Self.label("Create Folder:"), wrapPopup],
             [Self.label("After Extracting:"), afterExtractPopup],
-            [NSGridCell.emptyContentView, revealCheckbox],
+            [NSGridCell.emptyContentView, extractOptionsStack],
             [Self.separator(), NSGridCell.emptyContentView],
             [Self.label("Compression:"), compressionStack],
             [Self.separator(), NSGridCell.emptyContentView],
@@ -246,6 +259,7 @@ final class SettingsWindowController: NSWindowController {
         case .moveToTrash: afterExtractPopup.selectItem(at: 1)
         }
         revealCheckbox.state = settings.revealExtractedInFinder ? .on : .off
+        unpackNestedCheckbox.state = settings.unpackNestedArchives ? .on : .off
         updatesCheckbox.state = settings.checksForUpdates ? .on : .off
 
         switch settings.compressionLevel {
@@ -284,6 +298,7 @@ final class SettingsWindowController: NSWindowController {
         case autoExpandCheckbox: settings.autoExpandSingleFolder = on
         case showHiddenCheckbox: settings.showHiddenFiles = on
         case revealCheckbox: settings.revealExtractedInFinder = on
+        case unpackNestedCheckbox: settings.unpackNestedArchives = on
         case updatesCheckbox: settings.checksForUpdates = on
         default: break
         }
