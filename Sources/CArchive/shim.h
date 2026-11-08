@@ -45,6 +45,7 @@ int archive_read_support_format_xar(struct archive *);
 int archive_read_support_format_zip(struct archive *);
 int archive_read_add_passphrase(struct archive *, const char *);
 int archive_read_open_filename(struct archive *, const char *, size_t);
+int archive_read_open_filenames(struct archive *, const char **, size_t);
 int archive_read_next_header(struct archive *, struct archive_entry **);
 ssize_t archive_read_data(struct archive *, void *, size_t);
 int archive_read_data_skip(struct archive *);

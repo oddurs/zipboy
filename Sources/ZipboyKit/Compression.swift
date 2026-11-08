@@ -23,7 +23,7 @@ public enum ZipMethod: Equatable, Sendable {
     /// the Dock icon, even on systems where LaunchServices has not registered a dedicated UTI.
     public static let archiveExtensions: Set<String> = [
         "zip", "zipx", "cbz", "jar", "war", "ear", "apk", "ipa", "whl", "xpi", "nupkg",
-        "rar", "cbr", "7z", "cb7",
+        "rar", "cbr", "r00", "r01", "7z", "cb7", "z01", "001", "002",
         "tar", "tgz", "tbz", "tbz2", "txz", "tlz", "taz", "cbt",
         "gz", "bz2", "xz", "lzma", "z", "uu",
         "cpio", "cpgz", "iso", "cab", "lha", "lzh", "ar", "deb", "xar", "pkg",

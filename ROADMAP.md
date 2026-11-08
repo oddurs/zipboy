@@ -92,7 +92,7 @@ Any ZIP, however large, shows its contents in under a second and costs no disk s
 
 ## v0.4 — Part of the Mac
 
-`######····` 60% · 12 of 20 done · due 2027-03-12
+`#######···` 70% · 14 of 20 done · due 2027-03-12
 
 Zipboy works from the Finder as well as in its own window: Quick Look shows what's in an archive, Quick Actions compress and extract, updates arrive by themselves, and every flow works with VoiceOver and the keyboard alone.
 
@@ -101,7 +101,6 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [ ] `0031` Space in Finder shows what's inside an archive <sup>feature · p0 · system</sup>
 - [ ] `0032` Finder Quick Actions: Compress with Zipboy and Extract Here <sup>feature · p0 · system</sup>
 - [ ] `0038` Offer once to open ZIPs with Zipboy <sup>feature · p2 · system</sup>
-- [ ] `0093` Open split archives from any of their pieces <sup>feature · p1 · archive</sup>
 
 ### planned
 
@@ -123,6 +122,7 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 - [x] `0081` Windows come back as they were, and archives open as tabs <sup>feature · p2 · shell</sup>
 - [x] `0091` Move an archive to the Trash once it's extracted <sup>feature · p2 · shell</sup>
 - [x] `0092` Which split archives can libarchive join? <sup>spike · p1 · archive</sup>
+- [x] `0093` Open split archives from any of their pieces <sup>feature · p1 · archive</sup>
 - [x] `0095` Extract many archives in one go <sup>feature · p2 · shell</sup>
 
 ## v1.0 — The promise

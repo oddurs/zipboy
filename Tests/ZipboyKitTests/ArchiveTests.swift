@@ -1245,6 +1245,105 @@ import zlib
         try reader.close()
         try? fm.removeItem(at: secondBigZip)
     }
+
+    @Test func opensSplitArchivesFromFirstPieceAndLaterPieceAndReportsMissingPieceByName() throws {
+        let fm = FileManager.default
+        let cases: [(label: String, pieces: [(res: String, ext: String)], stem: String)] = [
+            (
+                "part-rar",
+                [("split-part.part1", "rar"), ("split-part.part2", "rar")],
+                "split-part"
+            ),
+            (
+                "old-rar",
+                [("split-old", "rar"), ("split-old", "r00"), ("split-old", "r01")],
+                "split-old"
+            ),
+            (
+                "split-zip",
+                [("split-zip", "z01"), ("split-zip", "zip")],
+                "split-zip"
+            ),
+            (
+                "split-7z",
+                [("split-7z.7z", "001"), ("split-7z.7z", "002")],
+                "split-7z"
+            ),
+            (
+                "split-tar",
+                [("split-tar.tar", "001"), ("split-tar.tar", "002")],
+                "split-tar"
+            ),
+        ]
+
+        for item in cases {
+            let setFolder = try folder("split-\(item.label)")
+            var urls: [URL] = []
+            for piece in item.pieces {
+                let src = try #require(
+                    Bundle.module.url(
+                        forResource: piece.res,
+                        withExtension: piece.ext,
+                        subdirectory: "Fixtures/split"
+                    ),
+                    "\(piece.res).\(piece.ext)"
+                )
+                let dst = setFolder.appendingPathComponent("\(piece.res).\(piece.ext)")
+                try fm.copyItem(at: src, to: dst)
+                urls.append(dst)
+            }
+
+            // 1. Opens from the first piece and from every later piece.
+            for (idx, pieceURL) in urls.enumerated() {
+                #expect(Archive.isSplitArchive(pieceURL), "\(pieceURL.lastPathComponent)")
+                #expect(Naming.stem(of: pieceURL) == item.stem, "\(pieceURL.lastPathComponent)")
+
+                let out = try folder("extract-\(item.label)-\(idx)")
+                let summary = try Archive.extract(pieceURL, into: out)
+                #expect(!summary.format.isEmpty)
+                #expect(try read("hello.txt", in: out) == "hello\n")
+                #expect(try read("dir/world.txt", in: out) == "world\n")
+
+                let report = try Archive.verify(pieceURL)
+                #expect(report.entryCount >= 2)
+
+                let listing = try Archive.list(pieceURL)
+                let paths = Set(listing.entries.map(\.path))
+                #expect(paths.contains("hello.txt"))
+                #expect(paths.contains("dir/world.txt"))
+            }
+
+            // 2. Removing the first piece and opening the second names the missing first piece.
+            let missingFirstFolder = try folder("missing-first-\(item.label)")
+            for u in urls.dropFirst() {
+                try fm.copyItem(at: u, to: missingFirstFolder.appendingPathComponent(u.lastPathComponent))
+            }
+            let secondPiece = missingFirstFolder.appendingPathComponent(urls[1].lastPathComponent)
+            let expectedFirstName = urls[0].lastPathComponent
+            #expect(throws: ArchiveError.missingSplitPiece(expectedFirstName)) {
+                _ = try Archive.extract(secondPiece, into: try folder("fail-first-\(item.label)"))
+            }
+            let explainedFirst = ArchiveError.describe(
+                ArchiveError.missingSplitPiece(expectedFirstName),
+                fileName: secondPiece.lastPathComponent
+            )
+            #expect(explainedFirst.title.contains(expectedFirstName))
+
+            // 3. Removing a later piece and opening the first names the missing later piece.
+            let missingSecondFolder = try folder("missing-second-\(item.label)")
+            try fm.copyItem(at: urls[0], to: missingSecondFolder.appendingPathComponent(urls[0].lastPathComponent))
+            if urls.count > 2 {
+                for u in urls.dropFirst(2) {
+                    try fm.copyItem(at: u, to: missingSecondFolder.appendingPathComponent(u.lastPathComponent))
+                }
+            }
+            let firstPiece = missingSecondFolder.appendingPathComponent(urls[0].lastPathComponent)
+            let expectedSecondName = urls[1].lastPathComponent
+            #expect(throws: ArchiveError.missingSplitPiece(expectedSecondName)) {
+                _ = try Archive.extract(firstPiece, into: try folder("fail-second-\(item.label)"))
+            }
+        }
+    }
 }
 
 @Suite struct NodeTests {

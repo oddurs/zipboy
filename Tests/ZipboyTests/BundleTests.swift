@@ -210,8 +210,35 @@ import ZipboyKit
             "pkg": "xar", "mpkg": "xar",
         ]
 
+        let splitDir = Self.root.appendingPathComponent("Tests/ZipboyKitTests/Fixtures/split")
+        let splitFixtureForExt: [String: (pieces: [String], target: String)] = [
+            "001": (["split-7z.7z.001", "split-7z.7z.002"], "split-7z.7z.001"),
+            "002": (["split-7z.7z.001", "split-7z.7z.002"], "split-7z.7z.002"),
+            "r00": (["split-old.rar", "split-old.r00", "split-old.r01"], "split-old.r00"),
+            "r01": (["split-old.rar", "split-old.r00", "split-old.r01"], "split-old.r01"),
+            "z01": (["split-zip.z01", "split-zip.zip"], "split-zip.z01"),
+        ]
+
         let controller = DocumentController()
         for ext in declaredExtensions.sorted() {
+            if let splitSpec = splitFixtureForExt[ext] {
+                let sub = scratch.appendingPathComponent("split-\(ext)")
+                try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+                for piece in splitSpec.pieces {
+                    try FileManager.default.copyItem(
+                        at: splitDir.appendingPathComponent(piece),
+                        to: sub.appendingPathComponent(piece)
+                    )
+                }
+                let sample = sub.appendingPathComponent(splitSpec.target)
+                let docType = try controller.typeForContents(of: sample)
+                #expect(openedTypes.contains(docType), ".\(ext) mapped to undeclared document type \(docType)")
+                #expect(
+                    canExtract(sample, into: scratch.appendingPathComponent("ext-\(ext)")),
+                    ".\(ext) failed to extract"
+                )
+                continue
+            }
             let suffix = canonicalSuffix[ext] ?? ext
             guard
                 let fixture = passingFixtures.first(where: { $0.lastPathComponent.lowercased().hasSuffix(".\(suffix)") }

@@ -278,10 +278,12 @@ final class ArchiveDocument: NSDocument {
         var usedSavedKeychain = (self.password == nil && password != nil)
         var rememberEnteredInKeychain = false
         var keychainFailure: Error?
+        let isSplit = Archive.isSplitArchive(url)
+        let isEditableZip = typeName == Self.zipType && !isSplit
         while true {
             do {
                 let outcome = try await Task.detached { [password] () throws -> UnpackOutcome in
-                    if typeName == Self.zipType, password == nil,
+                    if isEditableZip, password == nil,
                         let parsed = try? ZipCatalog.read(from: url, encoding: chosenEncoding),
                         !parsed.isEncrypted
                     {
@@ -306,7 +308,7 @@ final class ArchiveDocument: NSDocument {
                             return !cancellation.isCancelled
                         }
                         let catalog: ZipCatalog? =
-                            if typeName == Self.zipType, !summary.encrypted {
+                            if isEditableZip, !summary.encrypted {
                                 try? ZipCatalog.read(from: url, encoding: chosenEncoding)
                             } else {
                                 nil
@@ -346,9 +348,9 @@ final class ArchiveDocument: NSDocument {
                         workspace,
                         password: summary.encrypted ? password : nil,
                         catalog: parsedCatalog,
-                        sourceURL: typeName == Self.zipType ? url : nil
+                        sourceURL: isEditableZip ? url : nil
                     )
-                    if typeName != Self.zipType {
+                    if !isEditableZip {
                         importedFrom = (url, Self.shortName(summary.format))
                         fileURL = nil
                         fileType = Self.zipType

@@ -156,6 +156,8 @@
 				<array>
 					<string>rar</string>
 					<string>cbr</string>
+					<string>r00</string>
+					<string>r01</string>
 				</array>
 				<key>public.mime-type</key>
 				<array>
@@ -258,6 +260,9 @@
 					<string>xpi</string>
 					<string>nupkg</string>
 					<string>ear</string>
+					<string>z01</string>
+					<string>001</string>
+					<string>002</string>
 				</array>
 			</dict>
 		</dict>
