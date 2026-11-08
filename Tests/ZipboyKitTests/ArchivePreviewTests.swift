@@ -158,6 +158,10 @@ struct HelpTopicsTests {
             #expect(index.contains("href=\"\(topic.anchor).html\""), "\(topic.anchor)")
         }
         #expect(HelpTopics.all.contains { $0.anchor == "password" && $0.keywords.contains("password") })
+        let anchors = Set(HelpTopics.all.map(\.anchor))
+        for readmeFlow in ["open", "edit", "inplace", "extract", "create", "import", "password"] {
+            #expect(anchors.contains(readmeFlow), "Missing help section for README flow \(readmeFlow)")
+        }
     }
 
     @Test func theBookNamesItsIndexesAndFirstPage() {

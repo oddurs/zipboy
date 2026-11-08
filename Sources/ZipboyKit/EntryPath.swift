@@ -18,28 +18,44 @@ public enum EntryPath {
     }
 
     private static func isAlreadyClean(_ raw: String) -> Bool {
-        guard !raw.isEmpty, !raw.hasPrefix("/"), !raw.hasSuffix("/") else { return false }
-        let utf8 = raw.utf8
-        if utf8.contains(UInt8(ascii: "\\")) { return false }
-        var start = utf8.startIndex
-        while start < utf8.endIndex {
-            let slash = utf8[start...].firstIndex(of: UInt8(ascii: "/")) ?? utf8.endIndex
-            let count = utf8.distance(from: start, to: slash)
-            if count == 0 { return false }
-            let b0 = utf8[start]
-            if b0 == UInt8(ascii: ".") {
-                if count == 1 { return false }
-                let b1 = utf8[utf8.index(after: start)]
-                if b1 == UInt8(ascii: "_") { return false }
-                if count == 2 && b1 == UInt8(ascii: ".") { return false }
-                if count == 9 && raw[start..<slash] == ".DS_Store" { return false }
-            } else if count == 8, b0 == UInt8(ascii: "_"), raw[start..<slash] == "__MACOSX" {
-                return false
+        var copy = raw
+        return copy.withUTF8 { buf -> Bool in
+            let n = buf.count
+            guard n > 0, let base = buf.baseAddress, base[0] != 0x2F, base[n - 1] != 0x2F else { return false }
+            var start = 0
+            var i = 0
+            while i <= n {
+                let b: UInt8 = i < n ? base[i] : 0x2F
+                if b == 0x5C { return false }
+                if b == 0x2F {
+                    let count = i - start
+                    if count == 0 { return false }
+                    let b0 = base[start]
+                    if b0 == 0x2E {
+                        if count == 1 { return false }
+                        let b1 = base[start + 1]
+                        if b1 == 0x5F { return false }
+                        if count == 2 && b1 == 0x2E { return false }
+                        if count == 9
+                            && b1 == 0x44 && base[start + 2] == 0x53 && base[start + 3] == 0x5F
+                            && base[start + 4] == 0x53 && base[start + 5] == 0x74 && base[start + 6] == 0x6F
+                            && base[start + 7] == 0x72 && base[start + 8] == 0x65
+                        {
+                            return false
+                        }
+                    } else if count == 8 && b0 == 0x5F
+                        && base[start + 1] == 0x5F && base[start + 2] == 0x4D && base[start + 3] == 0x41
+                        && base[start + 4] == 0x43 && base[start + 5] == 0x4F && base[start + 6] == 0x53
+                        && base[start + 7] == 0x58
+                    {
+                        return false
+                    }
+                    start = i + 1
+                }
+                i += 1
             }
-            if slash == utf8.endIndex { break }
-            start = utf8.index(after: slash)
+            return true
         }
-        return true
     }
 
     /// Resource-fork folders, AppleDouble files, and Finder's view settings. They are dropped on the way

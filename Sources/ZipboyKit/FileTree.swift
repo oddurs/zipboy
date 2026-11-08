@@ -95,6 +95,25 @@ public final class Node {
         return root
     }
 
+    private static func splitLastSlash(_ path: String) -> (parent: String, leaf: String) {
+        var copy = path
+        return copy.withUTF8 { buf in
+            guard let base = buf.baseAddress else { return ("", path) }
+            var i = buf.count - 1
+            while i >= 0 {
+                if base[i] == 0x2F {
+                    let parent = String(decoding: UnsafeBufferPointer(start: base, count: i), as: UTF8.self)
+                    let leaf = String(
+                        decoding: UnsafeBufferPointer(start: base + i + 1, count: buf.count - i - 1),
+                        as: UTF8.self)
+                    return (parent, leaf)
+                }
+                i -= 1
+            }
+            return ("", path)
+        }
+    }
+
     private func mergeCatalog<S: Sequence>(
         workspaceRoot: URL,
         entries: S,
@@ -118,15 +137,7 @@ public final class Node {
 
         func ensureFolder(_ folderPath: String) -> Node {
             if let existing = folders[folderPath] { return existing }
-            let parentPath: String
-            let folderName: String
-            if let slash = folderPath.lastIndex(of: "/") {
-                parentPath = String(folderPath[..<slash])
-                folderName = String(folderPath[folderPath.index(after: slash)...])
-            } else {
-                parentPath = ""
-                folderName = folderPath
-            }
+            let (parentPath, folderName) = Self.splitLastSlash(folderPath)
             let parentNode = ensureFolder(parentPath)
             let folder = Node(
                 workspaceRoot: workspaceRoot,
@@ -157,15 +168,7 @@ public final class Node {
                 continue
             }
             if checkExistingChildren, existingByPath.contains(path) { continue }
-            let parentPath: String
-            let leafName: String
-            if let slash = path.lastIndex(of: "/") {
-                parentPath = String(path[..<slash])
-                leafName = String(path[path.index(after: slash)...])
-            } else {
-                parentPath = ""
-                leafName = path
-            }
+            let (parentPath, leafName) = Self.splitLastSlash(path)
             let parentNode = ensureFolder(parentPath)
             let child = Node(
                 workspaceRoot: workspaceRoot,

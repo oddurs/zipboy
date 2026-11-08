@@ -1557,7 +1557,11 @@ final class ArchiveDocument: NSDocument {
         var result: [String: String] = [:]
         func walk(_ node: Node) {
             for child in node.children {
-                result[child.path] = "\(child.size) \(child.modified?.timeIntervalSince1970 ?? 0)"
+                if child.isDirectory {
+                    result[child.path] = "dir"
+                } else {
+                    result[child.path] = "\(child.size) \(Int(child.modified?.timeIntervalSince1970 ?? 0))"
+                }
                 walk(child)
             }
         }
