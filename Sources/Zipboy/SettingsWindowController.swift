@@ -19,6 +19,7 @@ final class SettingsWindowController: NSWindowController {
         checkboxWithTitle: "Show hidden files (starting with a dot)", target: nil, action: nil)
     let destinationPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let wrapPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let afterExtractPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let revealCheckbox = NSButton(
         checkboxWithTitle: "Show extracted files in Finder", target: nil, action: nil)
     let updatesCheckbox = NSButton(
@@ -93,6 +94,13 @@ final class SettingsWindowController: NSWindowController {
         wrapPopup.target = self
         wrapPopup.action = #selector(wrapChanged(_:))
 
+        afterExtractPopup.addItems(withTitles: [
+            "Keep the archive",
+            "Move it to the Trash",
+        ])
+        afterExtractPopup.target = self
+        afterExtractPopup.action = #selector(afterExtractChanged(_:))
+
         compressionControl.target = self
         compressionControl.action = #selector(compressionChanged(_:))
         compressionControl.segmentDistribution = .fillEqually
@@ -142,6 +150,7 @@ final class SettingsWindowController: NSWindowController {
         launchPopup.setAccessibilityLabel("On launch")
         destinationPopup.setAccessibilityLabel("Extract to")
         wrapPopup.setAccessibilityLabel("Create folder")
+        afterExtractPopup.setAccessibilityLabel("After extracting")
         compressionControl.setAccessibilityLabel("Compression")
 
         let grid = NSGridView(views: [
@@ -151,6 +160,7 @@ final class SettingsWindowController: NSWindowController {
             [Self.separator(), NSGridCell.emptyContentView],
             [Self.label("Extract To:"), destinationPopup],
             [Self.label("Create Folder:"), wrapPopup],
+            [Self.label("After Extracting:"), afterExtractPopup],
             [NSGridCell.emptyContentView, revealCheckbox],
             [Self.separator(), NSGridCell.emptyContentView],
             [Self.label("Compression:"), compressionStack],
@@ -163,7 +173,7 @@ final class SettingsWindowController: NSWindowController {
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
         grid.rowAlignment = .firstBaseline
-        for rowIndex in [1, 3, 7, 9, 11] {
+        for rowIndex in [1, 3, 8, 10, 12] {
             grid.mergeCells(
                 inHorizontalRange: NSRange(location: 0, length: 2),
                 verticalRange: NSRange(location: rowIndex, length: 1))
@@ -189,6 +199,7 @@ final class SettingsWindowController: NSWindowController {
             launchPopup.widthAnchor.constraint(equalToConstant: 250),
             destinationPopup.widthAnchor.constraint(equalToConstant: 250),
             wrapPopup.widthAnchor.constraint(equalToConstant: 250),
+            afterExtractPopup.widthAnchor.constraint(equalToConstant: 250),
             compressionControl.widthAnchor.constraint(equalToConstant: 250),
 
             grid.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
@@ -229,6 +240,10 @@ final class SettingsWindowController: NSWindowController {
         case .whenMultipleItems: wrapPopup.selectItem(at: 0)
         case .always: wrapPopup.selectItem(at: 1)
         case .never: wrapPopup.selectItem(at: 2)
+        }
+        switch settings.afterExtract {
+        case .keepArchive: afterExtractPopup.selectItem(at: 0)
+        case .moveToTrash: afterExtractPopup.selectItem(at: 1)
         }
         revealCheckbox.state = settings.revealExtractedInFinder ? .on : .off
         updatesCheckbox.state = settings.checksForUpdates ? .on : .off
@@ -288,6 +303,10 @@ final class SettingsWindowController: NSWindowController {
         case 2: settings.wrapExtractedFiles = .never
         default: settings.wrapExtractedFiles = .whenMultipleItems
         }
+    }
+
+    @objc private func afterExtractChanged(_ sender: NSPopUpButton) {
+        settings.afterExtract = sender.indexOfSelectedItem == 1 ? .moveToTrash : .keepArchive
     }
 
     @objc private func compressionChanged(_ sender: NSSegmentedControl) {

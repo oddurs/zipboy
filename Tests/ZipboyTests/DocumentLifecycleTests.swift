@@ -216,4 +216,80 @@ import ZipboyKit
         _ = try Archive.extract(outer, into: unpacked)
         #expect(try names(in: unpacked.appendingPathComponent("nested.zip")) == ["inner.txt", "untitled folder"])
     }
+
+    // MARK: Trash after extract
+
+    @Test func moveArchiveToTrashAfterExtractHonorsSettingFailurePartialAndUnsavedEdits() async throws {
+        let suiteName = "com.oddurs.zipboy.trash.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let settings = Settings(defaults: defaults)
+        settings.afterExtract = .moveToTrash
+        settings.revealExtractedInFinder = false
+
+        let trashFolder = dir.appendingPathComponent("SimulatedTrash")
+        try FileManager.default.createDirectory(at: trashFolder, withIntermediateDirectories: true)
+        nonisolated(unsafe) var trashed: [URL] = []
+        settings.trashItem = { url in
+            trashed.append(url)
+            let dest = trashFolder.appendingPathComponent("\(UUID().uuidString)-\(url.lastPathComponent)")
+            try FileManager.default.moveItem(at: url, to: dest)
+        }
+
+        // 1. Successful Extract Here moves the archive to the Trash.
+        let serviceZip = dir.appendingPathComponent("ServiceExtract.zip")
+        try zip(["hello.txt": Data("hello".utf8)], to: serviceZip)
+        let serviceOutDir = dir.appendingPathComponent("service-out")
+        try FileManager.default.createDirectory(at: serviceOutDir, withIntermediateDirectories: true)
+        let serviceOutputs = try AppDelegate.extractArchives(
+            [serviceZip], into: serviceOutDir, settings: settings)
+        #expect(serviceOutputs.count == 1)
+        #expect(!FileManager.default.fileExists(atPath: serviceZip.path))
+        #expect(trashed.map(\.standardizedFileURL) == [serviceZip.standardizedFileURL])
+
+        // 2. A failed extract leaves the archive where it was.
+        trashed.removeAll()
+        let brokenZip = dir.appendingPathComponent("Broken.zip")
+        try Data("not a valid zip archive".utf8).write(to: brokenZip)
+        #expect(throws: Error.self) {
+            _ = try AppDelegate.extractArchives([brokenZip], into: serviceOutDir, settings: settings)
+        }
+        #expect(FileManager.default.fileExists(atPath: brokenZip.path))
+        #expect(trashed.isEmpty)
+
+        // 3. Extracting only some items from a window never trashes the archive.
+        let windowZip = dir.appendingPathComponent("WindowArchive.zip")
+        try zip(["one.txt": Data("1".utf8), "two.txt": Data("2".utf8)], to: windowZip)
+        let doc = try await open(windowZip)
+        doc.makeWindowControllers()
+        let browser = try #require((doc.windowControllers.first as? ArchiveWindowController)?.browser)
+        browser.settings = settings
+
+        let partialDir = dir.appendingPathComponent("partial-out")
+        try FileManager.default.createDirectory(at: partialDir, withIntermediateDirectories: true)
+        let oneNode = try #require(doc.tree?.find("one.txt"))
+        await browser.extract(into: partialDir, items: [oneNode])?.value
+        #expect(FileManager.default.fileExists(atPath: windowZip.path))
+        #expect(trashed.isEmpty)
+        #expect(!doc.windowControllers.isEmpty)
+
+        // 4. An archive with unsaved edits is never trashed, and its window stays open.
+        try await edit(doc) { _ = try doc.newFolder(in: "") }
+        let editedOutDir = dir.appendingPathComponent("edited-out")
+        try FileManager.default.createDirectory(at: editedOutDir, withIntermediateDirectories: true)
+        await browser.extract(into: editedOutDir, items: [])?.value
+        #expect(FileManager.default.fileExists(atPath: windowZip.path))
+        #expect(trashed.isEmpty)
+        #expect(!doc.windowControllers.isEmpty)
+
+        // 5. Once edits are cleared, extracting the whole archive moves it to the Trash and closes its window.
+        doc.updateChangeCount(.changeCleared)
+        #expect(!doc.isDocumentEdited)
+        let wholeOutDir = dir.appendingPathComponent("whole-out")
+        try FileManager.default.createDirectory(at: wholeOutDir, withIntermediateDirectories: true)
+        await browser.extract(into: wholeOutDir, items: [])?.value
+        #expect(!FileManager.default.fileExists(atPath: windowZip.path))
+        #expect(trashed.map(\.standardizedFileURL) == [windowZip.standardizedFileURL])
+    }
 }

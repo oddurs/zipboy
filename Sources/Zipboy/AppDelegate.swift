@@ -181,7 +181,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Extracts each archive in `urls` into `destinationFolder` (or beside each archive), honoring wrapping settings.
-    nonisolated static func extractArchives(_ urls: [URL], into destinationFolder: URL? = nil) throws -> [URL] {
+    nonisolated static func extractArchives(
+        _ urls: [URL], into destinationFolder: URL? = nil, settings: Settings = .shared
+    ) throws -> [URL] {
         var results: [URL] = []
         for archive in urls {
             let folder = destinationFolder ?? archive.deletingLastPathComponent()
@@ -194,7 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !topItems.isEmpty else { continue }
 
             let wrap: Bool =
-                switch Settings.shared.wrapExtractedFiles {
+                switch settings.wrapExtractedFiles {
                 case .whenMultipleItems: topItems.count > 1
                 case .always: true
                 case .never: false
@@ -217,6 +219,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 moved.append(destination)
             }
             results.append(contentsOf: wrap ? [targetFolder] : moved)
+            if settings.afterExtract == .moveToTrash {
+                try? settings.trashItem(archive)
+            }
         }
         return results
     }

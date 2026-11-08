@@ -25,6 +25,18 @@ public final class Settings: @unchecked Sendable {
         case never
     }
 
+    /// What happens to the source archive after extracting all of it.
+    public enum AfterExtractBehavior: String, CaseIterable, Sendable {
+        case keepArchive
+        case moveToTrash
+    }
+
+    /// Moves an extracted archive to the Trash. Overridable in tests so test runs don't leave temporary
+    /// archives in the user's Trash.
+    public var trashItem: @Sendable (URL) throws -> Void = { url in
+        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+    }
+
     /// Deflate compression effort when writing or autosaving a `.zip` archive.
     public enum CompressionLevel: Int, CaseIterable, Sendable {
         case fast = 1
@@ -39,6 +51,7 @@ public final class Settings: @unchecked Sendable {
         static let showHiddenFiles = "showHiddenFiles"
         static let extractDestination = "extractDestination"
         static let wrapExtractedFiles = "wrapExtractedFiles"
+        static let afterExtract = "afterExtract"
         static let revealExtractedInFinder = "revealExtractedInFinder"
         static let compressionLevel = "compressionLevel"
         static let launchCount = "launchCount"
@@ -53,6 +66,7 @@ public final class Settings: @unchecked Sendable {
             showHiddenFiles,
             extractDestination,
             wrapExtractedFiles,
+            afterExtract,
             revealExtractedInFinder,
             compressionLevel,
             checksForUpdates,
@@ -67,6 +81,7 @@ public final class Settings: @unchecked Sendable {
             Key.showHiddenFiles: false,
             Key.extractDestination: ExtractDestination.archiveFolder.rawValue,
             Key.wrapExtractedFiles: WrapBehavior.whenMultipleItems.rawValue,
+            Key.afterExtract: AfterExtractBehavior.keepArchive.rawValue,
             Key.revealExtractedInFinder: true,
             Key.compressionLevel: CompressionLevel.balanced.rawValue,
             Key.checksForUpdates: true,
@@ -139,6 +154,18 @@ public final class Settings: @unchecked Sendable {
         set {
             guard newValue != wrapExtractedFiles else { return }
             defaults.set(newValue.rawValue, forKey: Key.wrapExtractedFiles)
+            notify()
+        }
+    }
+
+    public var afterExtract: AfterExtractBehavior {
+        get {
+            defaults.string(forKey: Key.afterExtract).flatMap(AfterExtractBehavior.init(rawValue:))
+                ?? .keepArchive
+        }
+        set {
+            guard newValue != afterExtract else { return }
+            defaults.set(newValue.rawValue, forKey: Key.afterExtract)
             notify()
         }
     }
