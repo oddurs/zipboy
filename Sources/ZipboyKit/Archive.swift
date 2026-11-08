@@ -18,6 +18,8 @@ public enum ArchiveError: LocalizedError, Equatable {
     /// Only ZIP can be written with a password, so exporting an encrypted archive as anything else would
     /// leave it unprotected.
     case cantEncrypt(ExportFormat)
+    /// A part of a multi-volume split archive is missing from the folder.
+    case missingSplitPiece(String)
 
     public struct UserExplanation: Equatable, Sendable {
         public let title: String
@@ -57,6 +59,8 @@ public enum ArchiveError: LocalizedError, Equatable {
             reason
         case .cantEncrypt(let format):
             "A .\(format.fileExtension) archive can’t keep a password. Export as ZIP to keep it protected."
+        case .missingSplitPiece(let piece):
+            "Part of this split archive is missing: “\(piece)”."
         }
     }
 
@@ -99,6 +103,11 @@ public enum ArchiveError: LocalizedError, Equatable {
                     title: "A .\(format.fileExtension) archive can’t keep \(label)’s password.",
                     message:
                         "Exporting it as .\(format.fileExtension) would leave its contents unprotected. Choose ZIP to keep the password."
+                )
+            case .missingSplitPiece(let piece):
+                return UserExplanation(
+                    title: "\(label) is missing “\(piece)”.",
+                    message: "Place all parts of the split archive in the same folder and try again."
                 )
             case .cancelled:
                 return UserExplanation(title: "Cancelled.", message: "")
@@ -276,6 +285,406 @@ public enum Archive {
         archive_read_support_format_tar, archive_read_support_format_xar, archive_read_support_format_zip,
     ]
 
+    public struct SplitArchive: Equatable, Sendable {
+        public let pieces: [URL]
+        public let needsConcatenation: Bool
+        public let nextPieceName: String?
+    }
+
+    /// Returns true when `url` is a piece of a multi-volume split archive.
+    public static func isSplitArchive(_ url: URL) -> Bool {
+        let filename = url.lastPathComponent
+        if filename.wholeMatch(of: /(?i)^.+\.part0*\d+\.rar$/) != nil { return true }
+        if filename.wholeMatch(of: /(?i)^.+\.[rz]\d{2,}$/) != nil { return true }
+        if filename.wholeMatch(of: /^.+\.\d{3}$/) != nil { return true }
+        let ext = url.pathExtension.lowercased()
+        if ext == "zip" {
+            let folder = url.deletingLastPathComponent()
+            let stem = url.deletingPathExtension().lastPathComponent
+            let siblings = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            if siblings.contains(where: {
+                guard let m = $0.wholeMatch(of: /(?i)^(.+)\.z\d{2,}$/) else { return false }
+                return String(m.1).caseInsensitiveCompare(stem) == .orderedSame
+            }) {
+                return true
+            }
+            if (splitZipDiskCount(in: url) ?? 0) > 0 { return true }
+        } else if ext == "rar" {
+            let folder = url.deletingLastPathComponent()
+            let stem = url.deletingPathExtension().lastPathComponent
+            let siblings = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            if siblings.contains(where: {
+                guard let m = $0.wholeMatch(of: /(?i)^(.+)\.r\d{2,}$/) else { return false }
+                return String(m.1).caseInsensitiveCompare(stem) == .orderedSame
+            }) {
+                return true
+            }
+            if isMultiVolumeRAR(url) { return true }
+        }
+        return false
+    }
+
+    /// Resolves all pieces of a split archive in volume order starting from any piece `url`, or returns
+    /// `nil` if `url` is a standalone single-file archive. Throws `ArchiveError.missingSplitPiece` naming
+    /// the first missing piece if the sequence has a gap or missing volume.
+    public static func resolveSplitPieces(for url: URL) throws -> SplitArchive? {
+        let fm = FileManager.default
+        let folder = url.deletingLastPathComponent()
+        let filename = url.lastPathComponent
+        let ext = url.pathExtension.lowercased()
+        let siblings = (try? fm.contentsOfDirectory(atPath: folder.path)) ?? []
+
+        // 1. New RAR naming: <stem>.part1.rar, <stem>.part2.rar (or zero-padded .part01.rar)
+        if let match = filename.wholeMatch(of: /(?i)^(.+)\.part(0*(\d+))\.rar$/) {
+            let stem = String(match.1)
+            let rawDigits = String(match.2)
+            let clickedPart = max(1, Int(match.3) ?? 1)
+            var found: [Int: (name: String, width: Int)] = [:]
+            for s in siblings {
+                if let m = s.wholeMatch(of: /(?i)^(.+)\.part(0*(\d+))\.rar$/),
+                    String(m.1).caseInsensitiveCompare(stem) == .orderedSame,
+                    let n = Int(m.3), n >= 1
+                {
+                    found[n] = (name: s, width: String(m.2).count)
+                }
+            }
+            let padWidth =
+                rawDigits.hasPrefix("0")
+                ? rawDigits.count
+                : (found.values.first(where: { $0.width > 1 })?.width ?? 1)
+            let maxPart = max(clickedPart, found.keys.max() ?? 1, 2)
+            var ordered: [URL] = []
+            for k in 1...maxPart {
+                let expected = String(format: "%@.part%0*d.rar", stem, padWidth, k)
+                guard let entry = found[k] else {
+                    throw ArchiveError.missingSplitPiece(expected)
+                }
+                let pieceURL = folder.appendingPathComponent(entry.name)
+                guard fm.fileExists(atPath: pieceURL.path) else {
+                    throw ArchiveError.missingSplitPiece(entry.name)
+                }
+                ordered.append(pieceURL)
+            }
+            let nextName = String(format: "%@.part%0*d.rar", stem, padWidth, maxPart + 1)
+            return SplitArchive(pieces: ordered, needsConcatenation: false, nextPieceName: nextName)
+        }
+
+        // 2. Old RAR naming: <stem>.rar, <stem>.r00, <stem>.r01, ...
+        if let rMatch = filename.wholeMatch(of: /(?i)^(.+)\.r(\d{2,})$/) {
+            let stem = String(rMatch.1)
+            let width = max(2, String(rMatch.2).count)
+            let clickedIdx = max(0, Int(rMatch.2) ?? 0)
+            var foundR: [Int: String] = [:]
+            for s in siblings {
+                if let m = s.wholeMatch(of: /(?i)^(.+)\.r(\d{2,})$/),
+                    String(m.1).caseInsensitiveCompare(stem) == .orderedSame,
+                    let n = Int(m.2), n >= 0
+                {
+                    foundR[n] = s
+                }
+            }
+            let rarName = siblings.first { $0.caseInsensitiveCompare("\(stem).rar") == .orderedSame } ?? "\(stem).rar"
+            let rarURL = folder.appendingPathComponent(rarName)
+            guard fm.fileExists(atPath: rarURL.path) else {
+                throw ArchiveError.missingSplitPiece("\(stem).rar")
+            }
+            let maxIdx = max(clickedIdx, foundR.keys.max() ?? 0)
+            var ordered: [URL] = [rarURL]
+            for idx in 0...maxIdx {
+                let expected = String(format: "%@.r%0*d", stem, width, idx)
+                guard let name = foundR[idx] else {
+                    throw ArchiveError.missingSplitPiece(expected)
+                }
+                let pieceURL = folder.appendingPathComponent(name)
+                guard fm.fileExists(atPath: pieceURL.path) else {
+                    throw ArchiveError.missingSplitPiece(name)
+                }
+                ordered.append(pieceURL)
+            }
+            let nextName = String(format: "%@.r%0*d", stem, width, maxIdx + 1)
+            return SplitArchive(pieces: ordered, needsConcatenation: false, nextPieceName: nextName)
+        } else if ext == "rar" {
+            let stem = url.deletingPathExtension().lastPathComponent
+            var foundR: [Int: String] = [:]
+            for s in siblings {
+                if let m = s.wholeMatch(of: /(?i)^(.+)\.r(\d{2,})$/),
+                    String(m.1).caseInsensitiveCompare(stem) == .orderedSame,
+                    let n = Int(m.2), n >= 0
+                {
+                    foundR[n] = s
+                }
+            }
+            if !foundR.isEmpty || isMultiVolumeRAR(url) {
+                guard fm.fileExists(atPath: url.path) else {
+                    throw ArchiveError.missingSplitPiece(filename)
+                }
+                let maxIdx = max(foundR.keys.max() ?? 0, 0)
+                var ordered: [URL] = [url]
+                for idx in 0...maxIdx {
+                    let expected = String(format: "%@.r%02d", stem, idx)
+                    guard let name = foundR[idx] else {
+                        throw ArchiveError.missingSplitPiece(expected)
+                    }
+                    let pieceURL = folder.appendingPathComponent(name)
+                    guard fm.fileExists(atPath: pieceURL.path) else {
+                        throw ArchiveError.missingSplitPiece(name)
+                    }
+                    ordered.append(pieceURL)
+                }
+                let nextName = String(format: "%@.r%02d", stem, maxIdx + 1)
+                return SplitArchive(pieces: ordered, needsConcatenation: false, nextPieceName: nextName)
+            }
+        }
+
+        // 3. Split ZIP naming: <stem>.z01, <stem>.z02, ..., <stem>.zip
+        if let zMatch = filename.wholeMatch(of: /(?i)^(.+)\.z(\d{2,})$/) {
+            let stem = String(zMatch.1)
+            let width = max(2, String(zMatch.2).count)
+            let clickedIdx = max(1, Int(zMatch.2) ?? 1)
+            var foundZ: [Int: String] = [:]
+            for s in siblings {
+                if let m = s.wholeMatch(of: /(?i)^(.+)\.z(\d{2,})$/),
+                    String(m.1).caseInsensitiveCompare(stem) == .orderedSame,
+                    let n = Int(m.2), n >= 1
+                {
+                    foundZ[n] = s
+                }
+            }
+            let zipName = siblings.first { $0.caseInsensitiveCompare("\(stem).zip") == .orderedSame } ?? "\(stem).zip"
+            let zipURL = folder.appendingPathComponent(zipName)
+            let eocdDisks = splitZipDiskCount(in: zipURL) ?? 0
+            let maxIdx = max(clickedIdx, foundZ.keys.max() ?? 1, eocdDisks, 1)
+            var ordered: [URL] = []
+            for idx in 1...maxIdx {
+                let expected = String(format: "%@.z%0*d", stem, width, idx)
+                guard let name = foundZ[idx] else {
+                    throw ArchiveError.missingSplitPiece(expected)
+                }
+                let pieceURL = folder.appendingPathComponent(name)
+                guard fm.fileExists(atPath: pieceURL.path) else {
+                    throw ArchiveError.missingSplitPiece(name)
+                }
+                ordered.append(pieceURL)
+            }
+            guard fm.fileExists(atPath: zipURL.path) else {
+                throw ArchiveError.missingSplitPiece(zipName)
+            }
+            ordered.append(zipURL)
+            return SplitArchive(pieces: ordered, needsConcatenation: false, nextPieceName: nil)
+        } else if ext == "zip" {
+            let stem = url.deletingPathExtension().lastPathComponent
+            var foundZ: [Int: String] = [:]
+            for s in siblings {
+                if let m = s.wholeMatch(of: /(?i)^(.+)\.z(\d{2,})$/),
+                    String(m.1).caseInsensitiveCompare(stem) == .orderedSame,
+                    let n = Int(m.2), n >= 1
+                {
+                    foundZ[n] = s
+                }
+            }
+            let eocdDisks = splitZipDiskCount(in: url) ?? 0
+            if !foundZ.isEmpty || eocdDisks > 0 {
+                let maxIdx = max(foundZ.keys.max() ?? 1, eocdDisks, 1)
+                var ordered: [URL] = []
+                for idx in 1...maxIdx {
+                    let expected = String(format: "%@.z%02d", stem, idx)
+                    guard let name = foundZ[idx] else {
+                        throw ArchiveError.missingSplitPiece(expected)
+                    }
+                    let pieceURL = folder.appendingPathComponent(name)
+                    guard fm.fileExists(atPath: pieceURL.path) else {
+                        throw ArchiveError.missingSplitPiece(name)
+                    }
+                    ordered.append(pieceURL)
+                }
+                guard fm.fileExists(atPath: url.path) else {
+                    throw ArchiveError.missingSplitPiece(filename)
+                }
+                ordered.append(url)
+                return SplitArchive(pieces: ordered, needsConcatenation: false, nextPieceName: nil)
+            }
+        }
+
+        // 4. Numbered .001, .002, ... (including .7z.001, .tar.001, .zip.001, etc.)
+        if let numMatch = filename.wholeMatch(of: /^(.+)\.(\d{3})$/),
+            let clickedIdx = Int(numMatch.2), clickedIdx >= 1
+        {
+            let stem = String(numMatch.1)
+            var foundNum: [Int: String] = [:]
+            for s in siblings {
+                if let m = s.wholeMatch(of: /^(.+)\.(\d{3})$/),
+                    String(m.1).caseInsensitiveCompare(stem) == .orderedSame,
+                    let n = Int(m.2), n >= 1
+                {
+                    foundNum[n] = s
+                }
+            }
+            let maxIdx = max(clickedIdx, foundNum.keys.max() ?? 1, 2)
+            var ordered: [URL] = []
+            for idx in 1...maxIdx {
+                let expected = String(format: "%@.%03d", stem, idx)
+                guard let name = foundNum[idx] else {
+                    throw ArchiveError.missingSplitPiece(expected)
+                }
+                let pieceURL = folder.appendingPathComponent(name)
+                guard fm.fileExists(atPath: pieceURL.path) else {
+                    throw ArchiveError.missingSplitPiece(name)
+                }
+                ordered.append(pieceURL)
+            }
+            let is7z = stem.lowercased().hasSuffix(".7z")
+            let nextName = String(format: "%@.%03d", stem, maxIdx + 1)
+            if is7z, let expectedBytes = sevenZipExpectedSize(in: ordered[0]) {
+                let actualBytes = ordered.reduce(Int64(0)) { sum, piece in
+                    sum + Int64((try? piece.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+                }
+                if actualBytes < expectedBytes {
+                    throw ArchiveError.missingSplitPiece(nextName)
+                }
+            }
+            return SplitArchive(pieces: ordered, needsConcatenation: !is7z, nextPieceName: nextName)
+        }
+
+        return nil
+    }
+
+    private static func splitZipDiskCount(in zipURL: URL) -> Int? {
+        guard let handle = try? FileHandle(forReadingFrom: zipURL) else { return nil }
+        defer { try? handle.close() }
+        guard let fileSize = try? handle.seekToEnd(), fileSize >= 22 else { return nil }
+        let maxTail = min(fileSize, 65_535 + 22)
+        try? handle.seek(toOffset: fileSize - maxTail)
+        guard let tail = try? handle.readToEnd(), tail.count >= 22 else { return nil }
+        for i in stride(from: tail.count - 22, through: 0, by: -1) {
+            let sig =
+                UInt32(tail[i])
+                | (UInt32(tail[i + 1]) << 8)
+                | (UInt32(tail[i + 2]) << 16)
+                | (UInt32(tail[i + 3]) << 24)
+            if sig == 0x0605_4b50 {
+                let diskNumber = Int(UInt16(tail[i + 4]) | (UInt16(tail[i + 5]) << 8))
+                return diskNumber
+            }
+        }
+        return nil
+    }
+
+    private static func isMultiVolumeRAR(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 32), header.count >= 14 else { return false }
+        let rar4Sig: [UInt8] = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00]
+        let rar5Sig: [UInt8] = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00]
+        if header.starts(with: rar4Sig) {
+            guard header[9] == 0x73 else { return false }
+            let flags = UInt16(header[10]) | (UInt16(header[11]) << 8)
+            return (flags & 0x0001) != 0
+        }
+        if header.starts(with: rar5Sig) {
+            var pos = 12  // Skip 8-byte signature + 4-byte CRC32
+            func readVint() -> UInt64? {
+                var result: UInt64 = 0
+                var shift: UInt64 = 0
+                while pos < header.count {
+                    let byte = header[pos]
+                    pos += 1
+                    result |= UInt64(byte & 0x7F) << shift
+                    if (byte & 0x80) == 0 { return result }
+                    shift += 7
+                    if shift > 63 { return nil }
+                }
+                return nil
+            }
+            guard let _ = readVint(),
+                let headerType = readVint(), headerType == 1,
+                let headerFlags = readVint()
+            else { return false }
+            if (headerFlags & 0x0001) != 0 {
+                guard let _ = readVint() else { return false }
+            }
+            guard let archiveFlags = readVint() else { return false }
+            return (archiveFlags & 0x0001) != 0
+        }
+        return false
+    }
+
+    private static func sevenZipExpectedSize(in firstPiece: URL) -> Int64? {
+        guard let handle = try? FileHandle(forReadingFrom: firstPiece) else { return nil }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 32), header.count == 32 else { return nil }
+        let sig: [UInt8] = [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C]
+        guard header.starts(with: sig) else { return nil }
+        func u64(_ offset: Int) -> UInt64 {
+            var val: UInt64 = 0
+            for i in 0..<8 {
+                val |= UInt64(header[offset + i]) << (i * 8)
+            }
+            return val
+        }
+        let nextHeaderOffset = u64(12)
+        let nextHeaderSize = u64(20)
+        let (sum1, ov1) = nextHeaderOffset.addingReportingOverflow(nextHeaderSize)
+        let (total, ov2) = sum1.addingReportingOverflow(32)
+        guard !ov1, !ov2, let signed = Int64(exactly: total) else { return nil }
+        return signed
+    }
+
+    private static func openReader(
+        _ a: OpaquePointer, for archive: URL
+    ) throws -> (totalBytes: Int64, split: SplitArchive?, cleanup: () -> Void) {
+        guard let split = try resolveSplitPieces(for: archive) else {
+            guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else {
+                throw ArchiveError.unreadable(message(a))
+            }
+            let size = Int64((try? archive.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            return (size, nil, {})
+        }
+
+        let totalBytes = split.pieces.reduce(Int64(0)) { sum, piece in
+            sum + Int64((try? piece.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+
+        if split.needsConcatenation {
+            let fm = FileManager.default
+            let tempURL = fm.temporaryDirectory.appendingPathComponent(".Zipboy-split-\(UUID().uuidString)")
+            guard fm.createFile(atPath: tempURL.path, contents: nil) else {
+                throw ArchiveError.unreadable("Could not create temporary staging file for split archive.")
+            }
+            do {
+                let out = try FileHandle(forWritingTo: tempURL)
+                defer { try? out.close() }
+                for piece in split.pieces {
+                    let input = try FileHandle(forReadingFrom: piece)
+                    defer { try? input.close() }
+                    while let data = try input.read(upToCount: chunk), !data.isEmpty {
+                        try out.write(contentsOf: data)
+                    }
+                }
+            } catch {
+                try? fm.removeItem(at: tempURL)
+                throw ArchiveError.unreadable(error.localizedDescription)
+            }
+            guard archive_read_open_filename(a, tempURL.path, chunk) == ARCHIVE_OK else {
+                try? fm.removeItem(at: tempURL)
+                throw ArchiveError.unreadable(message(a))
+            }
+            return (totalBytes, split, { try? fm.removeItem(at: tempURL) })
+        }
+
+        var cStrings: [UnsafeMutablePointer<CChar>?] = split.pieces.map { strdup($0.path) }
+        cStrings.append(nil)
+        defer {
+            for ptr in cStrings where ptr != nil {
+                free(ptr)
+            }
+        }
+        var constPointers: [UnsafePointer<CChar>?] = cStrings.map { $0.map { UnsafePointer($0) } }
+        guard archive_read_open_filenames(a, &constPointers, chunk) == ARCHIVE_OK else {
+            throw ArchiveError.unreadable(message(a))
+        }
+        return (totalBytes, split, {})
+    }
+
     /// Unpacks `archive` into the empty directory `root`. Entries that would land outside `root`, through
     /// `..`, an absolute path, or a symlink, are skipped rather than trusted. `progress` hears the share of
     /// the file read so far, from 0 to 1, and stops the work by returning false. Each file and chunk is
@@ -297,11 +706,10 @@ public enum Archive {
         // which claims plain text files as archives of empty entries.
         for support in formats { _ = support(a) }
         if let password { archive_read_add_passphrase(a, password) }
-        guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else {
-            throw ArchiveError.unreadable(message(a))
-        }
+        let (totalBytes, splitInfo, cleanup) = try openReader(a, for: archive)
+        defer { cleanup() }
 
-        let total = Double((try? archive.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        let total = Double(totalBytes)
         func report() throws {
             guard let progress, total > 0 else { return }
             guard progress(min(1, Double(archive_filter_bytes(a, -1)) / total)) else { throw ArchiveError.cancelled }
@@ -345,6 +753,13 @@ public enum Archive {
                     throw ArchiveError.suspiciousArchive(
                         "An entry declares a 64-bit size that overflows (\(reason)) and cannot be trusted."
                     )
+                }
+                if let nextPiece = splitInfo?.nextPieceName,
+                    reason.localizedCaseInsensitiveContains("truncated")
+                        || reason.localizedCaseInsensitiveContains("premature end")
+                        || reason.localizedCaseInsensitiveContains("failed to open")
+                {
+                    throw ArchiveError.missingSplitPiece(nextPiece)
                 }
                 throw ArchiveError.unreadable(reason)
             }
@@ -486,6 +901,12 @@ public enum Archive {
                                         "The entry “\(path)” disagreed with its declared size and was stopped."
                                     )
                                 }
+                                if let nextPiece = splitInfo?.nextPieceName,
+                                    reason.localizedCaseInsensitiveContains("truncated")
+                                        || reason.localizedCaseInsensitiveContains("premature end")
+                                {
+                                    throw ArchiveError.missingSplitPiece(nextPiece)
+                                }
                                 throw ArchiveError.unreadable(reason)
                             }
                             let chunkBytes = Int64(n)
@@ -508,6 +929,9 @@ public enum Archive {
                             try report()
                         }
                         if !didDeflate64, sizeSet, size >= 0, !isXar(a), written != size {
+                            if let nextPiece = splitInfo?.nextPieceName {
+                                throw ArchiveError.missingSplitPiece(nextPiece)
+                            }
                             throw ArchiveError.suspiciousArchive(
                                 "The entry “\(path)” ended at \(written) bytes instead of its declared \(size) bytes."
                             )
@@ -1144,11 +1568,10 @@ public enum Archive {
         archive_read_support_filter_all(a)
         for support in formats { _ = support(a) }
         if let password { archive_read_add_passphrase(a, password) }
-        guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else {
-            throw ArchiveError.unreadable(message(a))
-        }
+        let (totalBytes, splitInfo, cleanup) = try openReader(a, for: archive)
+        defer { cleanup() }
 
-        let total = Double((try? archive.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        let total = Double(totalBytes)
         func report() throws {
             guard let progress, total > 0 else { return }
             guard progress(min(1, Double(archive_filter_bytes(a, -1)) / total)) else {
@@ -1178,6 +1601,13 @@ public enum Archive {
                     throw ArchiveError.suspiciousArchive(
                         "An entry declares a 64-bit size that overflows (\(reason)) and cannot be trusted."
                     )
+                }
+                if let nextPiece = splitInfo?.nextPieceName,
+                    reason.localizedCaseInsensitiveContains("truncated")
+                        || reason.localizedCaseInsensitiveContains("premature end")
+                        || reason.localizedCaseInsensitiveContains("failed to open")
+                {
+                    throw ArchiveError.missingSplitPiece(nextPiece)
                 }
                 throw ArchiveError.unreadable(reason)
             }
@@ -1422,9 +1852,8 @@ public enum Archive {
         defer { archive_read_free(a) }
         archive_read_support_filter_all(a)
         for support in formats { _ = support(a) }
-        guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else {
-            throw ArchiveError.unreadable(message(a))
-        }
+        let (_, _, cleanup) = try openReader(a, for: archive)
+        defer { cleanup() }
         var entries: [ArchiveListing.Entry] = []
         var encrypted = false
         var entry: OpaquePointer?
@@ -1473,7 +1902,8 @@ public enum Archive {
         defer { archive_read_free(a) }
         archive_read_support_filter_all(a)
         for support in formats { _ = support(a) }
-        guard archive_read_open_filename(a, archive.path, chunk) == ARCHIVE_OK else { return nil }
+        guard let (_, _, cleanup) = try? openReader(a, for: archive) else { return nil }
+        defer { cleanup() }
         var entry: OpaquePointer?
         for _ in 0..<scanLimit {
             guard archive_read_next_header(a, &entry) >= ARCHIVE_WARN, let entry else { return nil }

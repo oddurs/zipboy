@@ -24,8 +24,24 @@ public enum Naming {
     private static let innerContainers: Set<String> = ["tar", "cpio", "iso"]
 
     /// The base name of an archive without its extension, stripping compound extensions such as
-    /// `.tar.gz`, `.tar.xz`, `.tar.zst`, `.cpio.gz`, or `.iso.gz` so `project.tar.gz` becomes `project`.
+    /// `.tar.gz`, `.tar.xz`, `.tar.zst`, `.cpio.gz`, `.iso.gz`, or split-archive suffixes such as
+    /// `.part1.rar`, `.7z.001`, `.tar.001`, `.z01`, or `.r00` so `project.tar.gz` becomes `project`.
     public static func stem(of url: URL) -> String {
+        let filename = url.lastPathComponent
+        if let match = filename.wholeMatch(of: /(?i)^(.+)\.part0*\d+\.rar$/) {
+            let base = String(match.1)
+            return base.isEmpty ? "Archive" : base
+        }
+        let ext = url.pathExtension.lowercased()
+        if ext.wholeMatch(of: /^\d{3}$/) != nil {
+            let withoutPart = url.deletingPathExtension()
+            let innerExt = withoutPart.pathExtension.lowercased()
+            if ZipMethod.archiveExtensions.contains(innerExt) || innerContainers.contains(innerExt) {
+                return stem(of: withoutPart)
+            }
+            let base = withoutPart.lastPathComponent
+            return base.isEmpty ? "Archive" : base
+        }
         let once = url.deletingPathExtension()
         let inner = once.pathExtension.lowercased()
         if innerContainers.contains(inner) {

@@ -15,10 +15,12 @@ import struct
 import subprocess
 import tempfile
 import zipfile
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "Tests/ZipboyKitTests/Fixtures/matrix"
+SPLIT_OUT = ROOT / "Tests/ZipboyKitTests/Fixtures/split"
 FILES = ["hello.txt", "dir/world.txt"]
 
 
@@ -158,6 +160,150 @@ def write_lha(dest: str, src: Path) -> None:
     Path(dest).write_bytes(bytes(out))
 
 
+def rar4_crc(data: bytes) -> int:
+    return zlib.crc32(data) & 0xFFFF
+
+
+def rar4_main_block(first_vol: bool) -> bytes:
+    flags = 0x0001 | (0x0100 if first_vol else 0)
+    body = struct.pack("<BHHHI", 0x73, flags, 13, 0, 0)
+    return struct.pack("<H", rar4_crc(body)) + body
+
+
+def rar4_file_block(
+    name: str, full_data: bytes, chunk: bytes, split_before: bool, split_after: bool
+) -> bytes:
+    name_b = name.encode("utf-8")
+    flags = 0x8000
+    if split_before:
+        flags |= 0x0001
+    if split_after:
+        flags |= 0x0002
+    crc32 = zlib.crc32(full_data) & 0xFFFFFFFF
+    head_size = 7 + 25 + len(name_b)
+    body = (
+        struct.pack(
+            "<BHHIIBIIBBHI",
+            0x74,
+            flags,
+            head_size,
+            len(chunk),
+            len(full_data),
+            3,
+            crc32,
+            0x59610000,
+            29,
+            0x30,
+            len(name_b),
+            0o100644,
+        )
+        + name_b
+    )
+    return struct.pack("<H", rar4_crc(body)) + body + chunk
+
+
+def rar4_end_block(next_vol: bool) -> bytes:
+    flags = 0x0001 if next_vol else 0
+    body = struct.pack("<BHH", 0x7B, flags, 7)
+    return struct.pack("<H", rar4_crc(body)) + body
+
+
+def write_split_rar(pieces: list[Path], src: Path) -> None:
+    """Writes a multi-volume stored RAR archive across `pieces` holding FILES."""
+    entries = [(rel, (src / rel).read_bytes()) for rel in FILES]
+    volumes: list[bytearray] = [
+        bytearray(b"Rar!\x1a\x07\x00" + rar4_main_block(idx == 0))
+        for idx in range(len(pieces))
+    ]
+    first_name, first_data = entries[0]
+    n = len(pieces)
+    step = max(1, len(first_data) // n)
+    chunks = [
+        first_data[i * step : (i + 1) * step if i + 1 < n else len(first_data)]
+        for i in range(n)
+    ]
+    for idx, chunk in enumerate(chunks):
+        volumes[idx] += rar4_file_block(
+            first_name, first_data, chunk, idx > 0, idx + 1 < n
+        )
+    for rel, data in entries[1:]:
+        volumes[-1] += rar4_file_block(rel, data, data, False, False)
+    for idx, vol in enumerate(volumes):
+        vol += rar4_end_block(idx + 1 < n)
+        pieces[idx].write_bytes(bytes(vol))
+
+
+def write_split_zip(z01_path: Path, zip_path: Path, src: Path) -> None:
+    """Writes a 2-volume PKWARE split ZIP (z01 + zip) holding FILES."""
+    entries = [(rel, (src / rel).read_bytes()) for rel in FILES]
+
+    def local_record(name: str, data: bytes) -> tuple[bytes, int]:
+        raw_name = name.encode("utf-8")
+        crc = zlib.crc32(data) & 0xFFFFFFFF
+        hdr = struct.pack(
+            "<IHHHHHIIIHH",
+            0x04034B50,
+            20,
+            0x0800,
+            0,
+            0,
+            0x5961,
+            crc,
+            len(data),
+            len(data),
+            len(raw_name),
+            0,
+        )
+        return hdr + raw_name + data, crc
+
+    rec0, crc0 = local_record(*entries[0])
+    rec1, crc1 = local_record(*entries[1])
+    z01_bytes = struct.pack("<I", 0x08074B50) + rec0
+    z01_path.write_bytes(z01_bytes)
+
+    def central_record(name: str, data: bytes, crc: int, disk: int, offset: int) -> bytes:
+        raw_name = name.encode("utf-8")
+        return (
+            struct.pack(
+                "<IHHHHHHIIIHHHHHII",
+                0x02014B50,
+                0x031E,
+                20,
+                0x0800,
+                0,
+                0,
+                0x5961,
+                crc,
+                len(data),
+                len(data),
+                len(raw_name),
+                0,
+                0,
+                disk,
+                0,
+                0o100644 << 16,
+                offset,
+            )
+            + raw_name
+        )
+
+    cd0 = central_record(entries[0][0], entries[0][1], crc0, disk=0, offset=4)
+    cd1 = central_record(entries[1][0], entries[1][1], crc1, disk=1, offset=0)
+    cd = cd0 + cd1
+    eocd = struct.pack(
+        "<IHHHHIIH",
+        0x06054B50,
+        1,
+        1,
+        2,
+        2,
+        len(cd),
+        len(rec1),
+        0,
+    )
+    zip_path.write_bytes(rec1 + cd + eocd)
+
+
 def main() -> None:
     if shutil.which("7zz") is None:
         raise SystemExit("make-fixtures: 7zz not found; brew install sevenzip")
@@ -287,6 +433,38 @@ def main() -> None:
             subprocess.run(["gzip", "-9", "-c", str(iso)], check=True, stdout=gz)
         with open(out("gzip-single.gz"), "wb") as gz:
             subprocess.run(["gzip", "-c", "hello.txt"], cwd=src, check=True, stdout=gz)
+
+        SPLIT_OUT.mkdir(parents=True, exist_ok=True)
+        for existing in SPLIT_OUT.iterdir():
+            existing.unlink()
+        write_split_rar(
+            [SPLIT_OUT / "split-part.part1.rar", SPLIT_OUT / "split-part.part2.rar"],
+            src,
+        )
+        write_split_rar(
+            [
+                SPLIT_OUT / "split-old.rar",
+                SPLIT_OUT / "split-old.r00",
+                SPLIT_OUT / "split-old.r01",
+            ],
+            src,
+        )
+        write_split_zip(
+            SPLIT_OUT / "split-zip.z01",
+            SPLIT_OUT / "split-zip.zip",
+            src,
+        )
+        seven_full = src / "full.7z"
+        run(["7zz", "a", "-t7z", str(seven_full), *FILES], src)
+        seven_bytes = seven_full.read_bytes()
+        seven_mid = len(seven_bytes) // 2
+        (SPLIT_OUT / "split-7z.7z.001").write_bytes(seven_bytes[:seven_mid])
+        (SPLIT_OUT / "split-7z.7z.002").write_bytes(seven_bytes[seven_mid:])
+
+        tar_bytes = (OUT / "tar.tar").read_bytes()
+        # Split at a non-512-byte boundary (1,000 bytes) so concatenation is exercised.
+        (SPLIT_OUT / "split-tar.tar.001").write_bytes(tar_bytes[:1000])
+        (SPLIT_OUT / "split-tar.tar.002").write_bytes(tar_bytes[1000:])
 
     print(f"==> done; {len(list(OUT.iterdir()))} files in {OUT.relative_to(ROOT)}")
 

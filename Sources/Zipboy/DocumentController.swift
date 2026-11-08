@@ -20,8 +20,12 @@ final class DocumentController: NSDocumentController {
     /// opens as a Viewer so its original file is never overwritten.
     override func typeForContents(of url: URL) throws -> String {
         let ext = url.pathExtension.lowercased()
-        if ext == "zip" { return ArchiveDocument.zipType }
-        if ZipMethod.archiveExtensions.contains(ext) { return "public.archive" }
+        if ext == "zip" {
+            return Archive.isSplitArchive(url) ? "public.archive" : ArchiveDocument.zipType
+        }
+        if ZipMethod.archiveExtensions.contains(ext) || Archive.isSplitArchive(url) {
+            return "public.archive"
+        }
         return try super.typeForContents(of: url)
     }
 

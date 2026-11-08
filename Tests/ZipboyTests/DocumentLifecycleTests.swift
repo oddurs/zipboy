@@ -374,4 +374,52 @@ import ZipboyKit
         let depthComponents = remainingZip.split(separator: "/").filter { $0 == "self" }
         #expect(depthComponents.count == Settings.maxNestedArchiveDepth + 1)
     }
+
+    @Test func splitArchivesOpenReadOnlyAsImportsFromAnyPieceSoAutosaveNeverOverwritesAPiece() async throws {
+        let fm = FileManager.default
+        let splitFixtureRoot = BundleTests.root.appendingPathComponent("Tests/ZipboyKitTests/Fixtures/split")
+        let sets: [(stem: String, pieces: [String])] = [
+            ("split-part", ["split-part.part1.rar", "split-part.part2.rar"]),
+            ("split-old", ["split-old.rar", "split-old.r00", "split-old.r01"]),
+            ("split-zip", ["split-zip.z01", "split-zip.zip"]),
+            ("split-7z", ["split-7z.7z.001", "split-7z.7z.002"]),
+            ("split-tar", ["split-tar.tar.001", "split-tar.tar.002"]),
+        ]
+
+        let controller = DocumentController()
+        for set in sets {
+            let folder = dir.appendingPathComponent("doc-\(set.stem)")
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            var pieceURLs: [URL] = []
+            var originalBytes: [URL: Data] = [:]
+            for name in set.pieces {
+                let src = splitFixtureRoot.appendingPathComponent(name)
+                let dst = folder.appendingPathComponent(name)
+                try fm.copyItem(at: src, to: dst)
+                pieceURLs.append(dst)
+                originalBytes[dst] = try Data(contentsOf: dst)
+            }
+
+            // Open from the first piece and from the last piece.
+            for pieceURL in [pieceURLs.first!, pieceURLs.last!] {
+                let docType = try controller.typeForContents(of: pieceURL)
+                #expect(docType == "public.archive", "\(pieceURL.lastPathComponent)")
+
+                let doc = try await open(pieceURL, type: docType)
+                defer { doc.close() }
+
+                #expect(doc.fileURL == nil, "\(pieceURL.lastPathComponent) must open as an import with fileURL == nil")
+                #expect(doc.importedFrom?.url == pieceURL)
+                #expect(doc.suggestedName == set.stem)
+                #expect(doc.tree?.find("hello.txt") != nil)
+                #expect(doc.tree?.find("dir/world.txt") != nil)
+
+                // Edit the document and confirm none of the split pieces on disk are touched.
+                try await edit(doc) { _ = try doc.newFolder(in: "") }
+                for (u, expected) in originalBytes {
+                    #expect(try Data(contentsOf: u) == expected, "\(u.lastPathComponent) was modified")
+                }
+            }
+        }
+    }
 }

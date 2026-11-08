@@ -42,6 +42,9 @@ public struct ZipCatalog: Equatable, Sendable {
 
     /// Reads the Central Directory of the ZIP archive at `url`.
     public static func read(from url: URL, encoding: TextEncoding = .auto) throws -> ZipCatalog {
+        guard !Archive.isSplitArchive(url) else {
+            throw ArchiveError.unreadable("Multi-disk split ZIP archives require all parts merged.")
+        }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let fileSize = try handle.seekToEnd()
