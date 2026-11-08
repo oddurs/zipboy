@@ -742,7 +742,6 @@ final class ArchiveDocument: NSDocument {
             return
         }
         try? materializeHeldSynchronously()
-        try? sourceHandle?.close()
         sourceHandle = try? FileHandle(forReadingFrom: targetURL)
         recordProvenance(catalog: freshCatalog, sourceURL: targetURL) { identities[$0] }
     }
@@ -856,7 +855,6 @@ final class ArchiveDocument: NSDocument {
         materializingByPath.removeAll()
         watcher?.stop()
         watcher = nil
-        try? sourceHandle?.close()
         sourceHandle = sourceURL.flatMap { try? FileHandle(forReadingFrom: $0) }
         sourceQuarantine = sourceURL.flatMap { Archive.quarantine(of: $0) }
         self.workspace?.discard()
@@ -891,7 +889,6 @@ final class ArchiveDocument: NSDocument {
         materializingByPath.removeAll()
         watcher?.stop()
         watcher = nil
-        try? self.sourceHandle?.close()
         self.sourceHandle = sourceHandle
         self.sourceQuarantine = quarantine
         self.workspace?.discard()
@@ -947,6 +944,20 @@ final class ArchiveDocument: NSDocument {
         guard let workspace else { throw CocoaError(.fileReadUnknown) }
         var results: [URL] = []
         results.reserveCapacity(paths.count)
+        var completedPrior: Int64 = 0
+
+        func materializeWithCumulativeProgress(_ entryPath: String) async throws -> URL {
+            let entrySize = Int64(clamping: unmaterialized[entryPath]?.uncompressedSize ?? 0)
+            let prior = completedPrior
+            let url = try await materializeSingleEntry(
+                entryPath,
+                progress: progress.map { cb in
+                    { @Sendable entryBytes in cb(prior + entryBytes) }
+                }
+            )
+            completedPrior += entrySize
+            return url
+        }
 
         for rawPath in paths {
             let clean = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -978,15 +989,15 @@ final class ArchiveDocument: NSDocument {
                     }
                 }
                 for childPath in childEntries {
-                    _ = try await materializeSingleEntry(childPath, progress: progress)
+                    _ = try await materializeWithCumulativeProgress(childPath)
                 }
                 if unmaterialized[clean] != nil {
-                    _ = try await materializeSingleEntry(clean, progress: progress)
+                    _ = try await materializeWithCumulativeProgress(clean)
                 }
                 signature = Self.signature(of: tree)
                 results.append(workspace.url(clean))
             } else if unmaterialized[clean] != nil {
-                let url = try await materializeSingleEntry(clean, progress: progress)
+                let url = try await materializeWithCumulativeProgress(clean)
                 results.append(url)
             } else {
                 results.append(workspace.url(clean))
@@ -1398,10 +1409,7 @@ final class ArchiveDocument: NSDocument {
                         alert.runModal()
                     }
                 } catch {
-                    let alert = NSAlert()
-                    alert.alertStyle = .critical
-                    alert.messageText = "Verification failed for “\(sourceURL.lastPathComponent)”."
-                    alert.informativeText = error.localizedDescription
+                    let alert = Prompts.makeErrorAlert(for: error, fileName: sourceURL.lastPathComponent)
                     if let window = windowForSheet {
                         _ = await alert.beginSheetModal(for: window)
                     } else {
@@ -1485,27 +1493,31 @@ final class ArchiveDocument: NSDocument {
                 let format = ExportFormat.allCases[max(0, formatPopup.indexOfSelectedItem)]
                 let level = Settings.shared.compressionLevel
                 let currentPassword = self.password
-                if !self.unmaterialized.isEmpty || !self.unmaterializedFolders.isEmpty {
-                    try? self.materializeAllSynchronously()
-                }
-                guard let snapshot = try? workspace.snapshot() else { return }
-                self.report("Exporting…")
-                Task.detached {
-                    defer {
-                        try? FileManager.default.removeItem(at: snapshot)
-                        DispatchQueue.main.async { self.report(nil) }
+                do {
+                    if !self.unmaterialized.isEmpty || !self.unmaterializedFolders.isEmpty {
+                        try self.materializeAllSynchronously()
                     }
-                    do {
-                        try Archive.export(
-                            from: snapshot,
-                            to: destination,
-                            format: format,
-                            compressionLevel: level,
-                            password: currentPassword
-                        )
-                    } catch {
-                        _ = await MainActor.run { self.presentError(error) }
+                    let snapshot = try workspace.snapshot()
+                    self.report("Exporting…")
+                    Task.detached {
+                        defer {
+                            try? FileManager.default.removeItem(at: snapshot)
+                            DispatchQueue.main.async { self.report(nil) }
+                        }
+                        do {
+                            try Archive.export(
+                                from: snapshot,
+                                to: destination,
+                                format: format,
+                                compressionLevel: level,
+                                password: currentPassword
+                            )
+                        } catch {
+                            _ = await MainActor.run { self.presentError(error) }
+                        }
                     }
+                } catch {
+                    _ = self.presentError(error)
                 }
             }
         }

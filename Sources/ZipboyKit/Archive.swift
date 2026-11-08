@@ -299,24 +299,16 @@ public enum Archive {
         if filename.wholeMatch(of: /^.+\.\d{3}$/) != nil { return true }
         let ext = url.pathExtension.lowercased()
         if ext == "zip" {
-            let folder = url.deletingLastPathComponent()
-            let stem = url.deletingPathExtension().lastPathComponent
-            let siblings = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-            if siblings.contains(where: {
-                guard let m = $0.wholeMatch(of: /(?i)^(.+)\.z\d{2,}$/) else { return false }
-                return String(m.1).caseInsensitiveCompare(stem) == .orderedSame
-            }) {
+            let base = url.deletingPathExtension().path
+            let fm = FileManager.default
+            if fm.fileExists(atPath: base + ".z01") || fm.fileExists(atPath: base + ".Z01") {
                 return true
             }
             if (splitZipDiskCount(in: url) ?? 0) > 0 { return true }
         } else if ext == "rar" {
-            let folder = url.deletingLastPathComponent()
-            let stem = url.deletingPathExtension().lastPathComponent
-            let siblings = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-            if siblings.contains(where: {
-                guard let m = $0.wholeMatch(of: /(?i)^(.+)\.r\d{2,}$/) else { return false }
-                return String(m.1).caseInsensitiveCompare(stem) == .orderedSame
-            }) {
+            let base = url.deletingPathExtension().path
+            let fm = FileManager.default
+            if fm.fileExists(atPath: base + ".r00") || fm.fileExists(atPath: base + ".R00") {
                 return true
             }
             if isMultiVolumeRAR(url) { return true }
@@ -1072,6 +1064,9 @@ public enum Archive {
             return
         }
 
+        var expansion = ExpansionGuard(archiveBytes: max(Int64(clamping: entry.compressedSize), 1))
+        try expansion.admit(declared: Int64(clamping: entry.uncompressedSize), path: entry.path)
+
         try ensureParents(of: destination)
         let stagingDir = quarantineRoot?.deletingLastPathComponent() ?? destination.deletingLastPathComponent()
         let staging = stagingDir.appendingPathComponent(".Zipboy-mat-\(UUID().uuidString)")
@@ -1093,6 +1088,7 @@ public enum Archive {
                 entry,
                 fromFD: inHandle.fileDescriptor,
                 toFD: out.fileDescriptor,
+                expansion: &expansion,
                 progress: progress
             )
         } else if !entry.isEncrypted && entry.method == 9 {
@@ -1108,9 +1104,11 @@ public enum Archive {
                 budget: &budget,
                 capacity: { nil },
                 report: {
-                    if let progress, !progress(0) { throw ArchiveError.cancelled }
+                    if let progress, !progress(expansion.expanded) { throw ArchiveError.cancelled }
                 },
-                admit: { _, _ in }
+                admit: { chunkBytes, consumed in
+                    try expansion.add(chunkBytes, consumed: Int64(clamping: consumed))
+                }
             )
         } else {
             try extractSingleViaLibarchive(
@@ -1118,6 +1116,7 @@ public enum Archive {
                 from: sourceZip,
                 encoding: encoding,
                 to: staging,
+                expansion: &expansion,
                 progress: progress
             )
         }
@@ -1206,6 +1205,7 @@ public enum Archive {
         _ entry: ZipCatalog.Entry,
         fromFD inFD: Int32,
         toFD outFD: Int32,
+        expansion: inout ExpansionGuard,
         progress: ((Int64) -> Bool)?
     ) throws {
         let dataOffset = try payloadOffset(of: entry, inFD: inFD)
@@ -1287,6 +1287,7 @@ public enum Archive {
                             return (rawOut.count - Int(stream.avail_out), st)
                         }
                         if produced > 0 {
+                            try expansion.add(Int64(produced), consumed: Int64(clamping: currentOffset - dataOffset))
                             outBuf.withUnsafeBufferPointer { rawOut in
                                 if let base = rawOut.baseAddress {
                                     crc = zlib.crc32(crc, base, uInt(produced))
@@ -1328,6 +1329,7 @@ public enum Archive {
         from archive: URL,
         encoding: TextEncoding,
         to staging: URL,
+        expansion: inout ExpansionGuard,
         progress: ((Int64) -> Bool)?
     ) throws {
         useUTF8Names()
@@ -1347,6 +1349,9 @@ public enum Archive {
                 archive_read_data_skip(a)
                 continue
             }
+            if archive_entry_size_is_set(current) != 0 {
+                try expansion.admit(declared: archive_entry_size(current), path: entryPath)
+            }
             let out = try FileHandle(forWritingTo: staging)
             defer { try? out.close() }
             var written: Int64 = 0
@@ -1354,6 +1359,7 @@ public enum Archive {
                 let n = archive_read_data(a, &buffer, buffer.count)
                 if n == 0 { return }
                 if n < 0 { throw ArchiveError.unreadable(message(a)) }
+                try expansion.add(Int64(n), consumed: archive_filter_bytes(a, -1))
                 try out.write(contentsOf: buffer[0..<n])
                 written += Int64(n)
                 if let progress, !progress(written) { throw ArchiveError.cancelled }
