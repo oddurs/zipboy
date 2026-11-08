@@ -127,14 +127,13 @@ Zipboy works from the Finder as well as in its own window: Quick Look shows what
 
 ## v1.0 — The promise
 
-`#·········` 10% · 1 of 10 done · due 2027-04-23
+`##········` 20% · 2 of 10 done · due 2027-04-23
 
 An archive behaves like a Finder folder, reliably, for anyone: hardened against hostile archives, documented, and proven by a public beta. No new features.
 
 ### backlog
 
 - [ ] `0040` Fuzz ZipCatalog and the libarchive reading path <sup>chore · p0 · quality</sup>
-- [ ] `0042` Zipboy Help: a short guide in the Help menu <sup>docs · p1 · distribution</sup>
 - [ ] `0043` A landing page with the download, screenshots, and the format table <sup>docs · p1 · distribution</sup>
 - [ ] `0044` A two-week public beta with every crash and data-loss report closed <sup>chore · p0 · quality</sup>
 - [ ] `0045` Release checklist and the v1.0 tag <sup>chore · p0 · distribution</sup>
@@ -149,6 +148,7 @@ An archive behaves like a Finder folder, reliably, for anyone: hardened against 
 ### done
 
 - [x] `0041` Hostile archives: zip bombs, traversal, link chains, and absurd sizes <sup>feature · p0 · archive</sup>
+- [x] `0042` Zipboy Help: a short guide in the Help menu <sup>docs · p1 · distribution</sup>
 
 ## later — Later
 

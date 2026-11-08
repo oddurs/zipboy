@@ -110,7 +110,7 @@ public struct ZipCatalog: Equatable, Sendable {
         struct RawRecord {
             let index: Int
             let rawName: Data
-            let unicodeExtraName: String?
+            let fastDecodedName: String?
             let versionMadeBy: UInt16
             let versionNeeded: UInt16
             let flags: UInt16
@@ -215,15 +215,27 @@ public struct ZipCatalog: Equatable, Sendable {
                 if let prev = rawRecords.last, localOffset < prev.localHeaderOffset {
                     alreadyOrdered = false
                 }
-                if (flags & (1 << 11)) == 0, unicodeName == nil, nameBytes.contains(where: { $0 >= 0x80 }) {
+                var hasHighByte = false
+                if let base = nameBytes.baseAddress {
+                    var j = 0
+                    while j < nameLen {
+                        if base.load(fromByteOffset: j, as: UInt8.self) >= 0x80 {
+                            hasHighByte = true
+                            break
+                        }
+                        j += 1
+                    }
+                }
+                if (flags & (1 << 11)) == 0, unicodeName == nil, hasHighByte {
                     unflaggedNonASCII.append(nameSlice)
                 }
+                let fastName = unicodeName ?? (!hasHighByte ? String(decoding: nameBytes, as: UTF8.self) : nil)
 
                 rawRecords.append(
                     RawRecord(
                         index: index,
                         rawName: nameSlice,
-                        unicodeExtraName: unicodeName,
+                        fastDecodedName: fastName,
                         versionMadeBy: versionMadeBy,
                         versionNeeded: versionNeeded,
                         flags: flags,
@@ -252,12 +264,15 @@ public struct ZipCatalog: Equatable, Sendable {
         // Verify that no two entries claim overlapping local header regions. Each record's offset plus
         // compressed size is already bounded by the directory's offset, so these sums can't overflow.
         let byOffset = alreadyOrdered ? rawRecords : rawRecords.sorted { $0.localHeaderOffset < $1.localHeaderOffset }
-        for i in 0..<byOffset.count where i + 1 < byOffset.count {
-            let current = byOffset[i]
-            let next = byOffset[i + 1]
-            let minCurrentEnd = current.localHeaderOffset + 30 + UInt64(current.rawName.count) + current.compressedSize
-            if minCurrentEnd > next.localHeaderOffset {
-                throw ArchiveError.unreadable("Overlapping local file entries in ZIP archive.")
+        if byOffset.count > 1 {
+            for i in 0..<(byOffset.count - 1) {
+                let current = byOffset[i]
+                let next = byOffset[i + 1]
+                let minCurrentEnd =
+                    current.localHeaderOffset + 30 + UInt64(current.rawName.count) + current.compressedSize
+                if minCurrentEnd > next.localHeaderOffset {
+                    throw ArchiveError.unreadable("Overlapping local file entries in ZIP archive.")
+                }
             }
         }
 
@@ -274,7 +289,7 @@ public struct ZipCatalog: Equatable, Sendable {
         for record in rawRecords {
             let utf8Flag = (record.flags & (1 << 11)) != 0
             let decodedName =
-                record.unicodeExtraName
+                record.fastDecodedName
                 ?? resolvedEncoding.decode(record.rawName, utf8Flagged: utf8Flag)
             let unixMode = Int((record.externalAttributes >> 16) & 0xFFFF)
             let unixType = unixMode & 0o170000

@@ -15,18 +15,33 @@ public enum HelpTopics {
         Topic(
             anchor: "open", title: "Opening & Browsing Archives",
             summary:
-                "Open ZIP, RAR, 7z, TAR, Gzip, Bzip2, XZ, Zstandard, LHA, CAB, ISO, CPIO, and XAR archives with ⌘O or by dragging them onto Zipboy. Press Space for Quick Look, or double-click a nested archive to open it in its own Zipboy window.",
-            keywords: ["open", "browse", "quick look", "space", "nested", "rar", "7z", "tar", "zip"]),
+                "Open ZIP, RAR, 7z, TAR, Gzip, Bzip2, XZ, LHA, CAB, ISO, CPIO, and XAR archives with ⌘O or by dragging them onto Zipboy. Browse a Finder-style list with thumbnails, search, and a live preview beside it, or press Space for Quick Look.",
+            keywords: ["open", "browse", "look inside", "quick look", "space", "thumbnails", "search", "preview"]),
         Topic(
             anchor: "edit", title: "Adding, Renaming, & Deleting Files",
             summary:
-                "Drag files and folders from Finder into the archive, or press ⌘⇧A to add files and ⌘⇧N for a new folder. Hovering a dragged item over a collapsed folder for 0.7 seconds springs it open. Press Return to rename, Delete to remove, and ⌘Z to undo any edit.",
-            keywords: ["add", "rename", "delete", "new folder", "undo", "redo", "drag", "spring"]),
+                "Drop files and folders onto any folder, paste, press ⌘⇧A to add files, or press ⌘⇧N for a new folder. Hovering a dragged item over a collapsed folder for 0.7 seconds springs it open. Press Return to rename, Delete to remove, and ⌘Z to undo any change.",
+            keywords: ["add", "change", "rename", "delete", "new folder", "undo", "redo", "drag", "spring", "paste"]),
+        Topic(
+            anchor: "inplace", title: "Editing Files in Place",
+            summary:
+                "Double-click any file inside an archive to open it in its default app, or choose Open With from the shortcut menu. Save your changes in that app and Zipboy automatically updates the archive.",
+            keywords: ["edit in place", "double-click", "open with", "save", "external", "nested"]),
         Topic(
             anchor: "extract", title: "Extracting & Dragging Out",
             summary:
-                "Drag any files or folders out to Finder, press ⌘E to extract to your default destination (configured in Settings), or press ⌥⌘E to choose a destination folder.",
-            keywords: ["extract", "unpack", "finder", "drag out", "destination", "wrap"]),
+                "Drag any files or folders out to Finder, press ⌘E to extract next to the archive (or to your default destination in Settings), or press ⌥⌘E to choose a destination folder. A single folder extracts as itself, never wrapped inside an extra folder.",
+            keywords: ["extract", "take out", "unpack", "finder", "drag out", "destination", "wrap"]),
+        Topic(
+            anchor: "create", title: "Making a New ZIP Archive",
+            summary:
+                "Drop files or folders onto the Zipboy icon in the Dock, choose Compress with Zipboy in Finder’s Services menu, or press ⌘N to start an empty archive window and drag items in.",
+            keywords: ["make a zip", "create", "new archive", "compress", "dock", "drop"]),
+        Topic(
+            anchor: "import", title: "Opening RAR, 7z, & Tar Archives",
+            summary:
+                "RAR, 7z, tar, and other non-ZIP archives open as a new ZIP document named after the original archive. Any edits or saves write to the new ZIP, leaving the original file untouched.",
+            keywords: ["rar", "7z", "tar", "import", "read-only", "convert", "original"]),
         Topic(
             anchor: "password", title: "Passwords & AES-256 Encryption",
             summary:
